@@ -1,0 +1,70 @@
+# ===================================================================
+# 1. DATA (LE PLUS CRITIQUE)
+# ===================================================================
+
+# Ignorer les données brutes téléchargées (SIRENE, INPI)
+data/raw/
+
+# Ignorer les données processées (la cohorte 2018)
+data/processed/
+
+
+# ===================================================================
+# 2. ENVIRONNEMENT PYTHON
+# ===================================================================
+venv/
+env/
+.venv/
+.env/
+*.egg-info/
+*.egg
+
+
+# ===================================================================
+# 3. CACHES & FICHIERS JUPYTER
+# ===================================================================
+
+# Caches Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Checkpoints Jupyter
+.ipynb_checkpoints/
+
+
+# ===================================================================
+# 4. MODÈLES SAUVEGARDÉS & ARTIFACTS
+# ===================================================================
+*.model
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.weights
+*.parquet
+
+
+# ===================================================================
+# 5. SECRETS & CONFIGURATION
+# ===================================================================
+.env
+*.env
+config.ini
+*.secret
+
+
+# ===================================================================
+# 6. IDE & SYSTÈME D'EXPLOITATION
+# Fichiers "poubelle" générés par les éditeurs de code et l'OS.
+# ===================================================================
+
+# macOS
+.DS_Store
+
+# VSCode
+.vscode/
+
+# PyCharm
+.idea/

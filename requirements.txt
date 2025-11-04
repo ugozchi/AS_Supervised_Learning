@@ -3,6 +3,7 @@ numpy
 pandas
 matplotlib
 seaborn
+polars
 
 # === Machine Learning ===
 scikit-learn
