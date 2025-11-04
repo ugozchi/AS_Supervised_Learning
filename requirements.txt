@@ -1,0 +1,23 @@
+# === Librairies de base ===
+numpy
+pandas
+matplotlib
+seaborn
+
+# === Machine Learning ===
+scikit-learn
+xgboost
+lightgbm
+
+# === Manipulation de fichiers et formats de données ===
+openpyxl
+xlrd
+pyarrow
+
+# === Statistiques et maths ===
+scipy
+statsmodels
+
+# === Environnement interactif ===
+jupyter
+jupyterlab
