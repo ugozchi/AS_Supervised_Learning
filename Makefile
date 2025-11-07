@@ -1,10 +1,7 @@
 # ===================================================================
-# Makefile pour le Projet SIRENE Survival
-# Télécommande pour l'installation, le data processing et le modeling.
+# Makefile
 # ===================================================================
 
-# Nom de l'interpréteur python dans l'env virtuel
-# On le force à utiliser python3.11 ou ce que tu veux
 PYTHON = .venv/bin/python3
 
 # --- 1. SETUP DE L'ENVIRONNEMENT ---
@@ -30,6 +27,15 @@ data/processed/cohort_2018_FULL_MONSTROUS.parquet: scripts/02_build_dna_financia
 	@echo "--- [2/2] Lancement du Script 02: Création du 'DNA Financier'..."
 	$(PYTHON) scripts/02_build_dna_financial.py
 	@echo "--- [2/2] 'DNA Financier' créé. ---"
+
+
+
+
+
+
+
+
+
 
 # Cible "process" : Construit les deux fichiers de données
 process: data/processed/cohort_2018_demographic.parquet data/processed/cohort_2018_FULL_MONSTROUS.parquet
