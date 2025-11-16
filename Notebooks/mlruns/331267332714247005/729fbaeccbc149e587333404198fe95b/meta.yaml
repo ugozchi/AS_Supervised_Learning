@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/Notebooks/mlruns/331267332714247005/729fbaeccbc149e587333404198fe95b/artifacts
+end_time: 1763308516393
+entry_point_name: ''
+experiment_id: '331267332714247005'
+lifecycle_stage: active
+run_id: 729fbaeccbc149e587333404198fe95b
+run_name: big-rook-277
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1763308430938
+status: 3
+tags: []
+user_id: ugo
