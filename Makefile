@@ -177,12 +177,12 @@ download: $(FILE_UL) $(FILE_ETAB) $(FILE_ETAB_HISTO) $(FILE_INPI)
 
 # --- 6. Data Processing (La Pipeline "Monstrueuse") ---
 $(PROC_SIRENE): $(SCRIPT_SIRENE) $(FILE_UL) $(FILE_ETAB) $(FILE_ETAB_HISTO) .venv/bin/activate
-	@echo "--- [1/2] Lancement Script 01: Création du MASTER FILE SIRENE..."
+	@echo "\n--- [1/2] Lancement Script 01: Création du MASTER FILE SIRENE..."
 	$(PYTHON) $(SCRIPT_SIRENE)
 	@echo "--- [1/2] Master SIRENE créé. ---"
 
 $(PROC_INPI): $(SCRIPT_INPI) $(FILE_INPI) .venv/bin/activate
-	@echo "--- [2/2] Lancement Script 02: Création du 'DNA Financier'..."
+	@echo "\n--- [2/2] Lancement Script 02: Création du 'DNA Financier'..."
 	$(PYTHON) $(SCRIPT_INPI)
 	@echo "--- [2/2] 'DNA Financier' créé. ---"
 
