@@ -3,22 +3,23 @@ import pyarrow.parquet as pq
 import sys
 import os
 
-# --- 1. GESTION DES CHEMINS (LA CORRECTION "MONSTRUEUSE") ---
+# --- 1. GESTION DES CHEMINS (ROBUSTE) ---
 try:
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 except NameError:
-    SCRIPT_DIR = os.getcwd()
+    SCRIPT_DIR = os.path.join(os.getcwd(), "Scripts")
 
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, os.pardir))
 
 PATH_INPI = os.path.join(PROJECT_ROOT, "Data/raw/ExportDetailBilan.parquet")
-PATH_OUTPUT = os.path.join(PROJECT_ROOT, "Data/processed/sirene_bilan.parquet")
+PATH_OUTPUT = os.path.join(PROJECT_ROOT, "Data/processed/sirene_bilan.parquet") # Cible du Makefile
 
 print("--- Lancement Script 02: Création du 'DNA Financier' (Pivot Expert) ---")
 
 # --- 2. VÉRIFICATION DES FICHIERS ---
 if not os.path.exists(PATH_INPI):
     print(f"ERREUR FATALE: Fichier brut manquant : {PATH_INPI}", file=sys.stderr)
+    print("Assure-toi que les fichiers sont dans 'Data/raw/' (as-tu lancé 'make download'?)", file=sys.stderr)
     sys.exit(1)
 
 # --- 3. LISTE DES CODES "DIAMANT" ---
