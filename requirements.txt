@@ -9,6 +9,7 @@ polars
 scikit-learn
 xgboost
 lightgbm
+libomp
 
 # === Manipulation de fichiers et formats de données ===
 openpyxl
