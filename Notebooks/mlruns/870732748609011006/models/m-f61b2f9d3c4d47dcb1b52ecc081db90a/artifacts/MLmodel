@@ -1,0 +1,28 @@
+artifact_path: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/Notebooks/mlruns/870732748609011006/models/m-f61b2f9d3c4d47dcb1b52ecc081db90a/artifacts
+flavors:
+  python_function:
+    data: model.ubj
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.xgboost
+    python_version: 3.13.7
+  xgboost:
+    code: null
+    data: model.ubj
+    model_class: xgboost.sklearn.XGBRegressor
+    model_format: ubj
+    xgb_version: 3.1.1
+is_signature_from_type_hint: false
+mlflow_version: 3.6.0
+model_id: m-f61b2f9d3c4d47dcb1b52ecc081db90a
+model_size_bytes: 17805009
+model_uuid: m-f61b2f9d3c4d47dcb1b52ecc081db90a
+prompts: null
+run_id: 83b1cda248f942058ba5d037f569f604
+signature:
+  inputs: '[{"type": "tensor", "tensor-spec": {"dtype": "float64", "shape": [-1, 225]}}]'
+  outputs: '[{"type": "tensor", "tensor-spec": {"dtype": "float32", "shape": [-1]}}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2025-11-16 17:07:21.679902'

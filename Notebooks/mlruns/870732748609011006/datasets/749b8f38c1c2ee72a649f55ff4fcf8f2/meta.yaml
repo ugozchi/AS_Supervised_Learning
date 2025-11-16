@@ -1,0 +1,10 @@
+digest: 3a660af5
+name: dataset
+profile: '{"features_shape": [415411, 225], "features_size": 93467475, "features_nbytes":
+  373869900}'
+schema: '{"mlflow_tensorspec": {"features": "[{\"type\": \"tensor\", \"tensor-spec\":
+  {\"dtype\": \"float32\", \"shape\": [-1, 225]}}]", "targets": null}}'
+source: '{"tags": {"mlflow.user": "ugo", "mlflow.source.name": "/Users/ugo/Documents/Cours/Master/Cours/M1/Supervised
+  Learning/Final Project/.venv/lib/python3.13/site-packages/ipykernel_launcher.py",
+  "mlflow.source.type": "LOCAL"}}'
+source_type: code
