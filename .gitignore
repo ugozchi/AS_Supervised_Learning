@@ -68,3 +68,5 @@ config.ini
 
 # PyCharm
 .idea/
+
+Notebooks/mlruns/*
