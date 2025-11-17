@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/Notebooks/mlruns/312728082075487082/5dcfef98003c4a62a0c33d4a4eca0f85/artifacts
+end_time: null
+entry_point_name: ''
+experiment_id: '312728082075487082'
+lifecycle_stage: active
+run_id: 5dcfef98003c4a62a0c33d4a4eca0f85
+run_name: agreeable-sponge-198
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1763400483482
+status: 1
+tags: []
+user_id: ugo

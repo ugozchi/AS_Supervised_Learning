@@ -1,0 +1,13 @@
+ColumnTransformer(remainder='passthrough',
+                  transformers=[('cat',
+                                 OneHotEncoder(handle_unknown='ignore',
+                                               min_frequency=0.001,
+                                               sparse_output=False),
+                                 ['categorieJuridiqueUniteLegale',
+                                  'trancheEffectifsUniteLegale',
+                                  'activitePrincipaleUniteLegale',
+                                  'categorieEntreprise',
+                                  'economieSocialeSolidaireUniteLegale',
+                                  'moisCreation', 'departement',
+                                  'trancheEffectifsSiege',
+                                  'caractereEmployeurSiege'])])

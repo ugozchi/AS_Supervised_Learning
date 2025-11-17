@@ -1,0 +1,10 @@
+artifact_location: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/Notebooks/mlruns/632157656388572891/models/m-b0a2693ed4874cacb0bca8a829e5e5ac/artifacts
+creation_timestamp: 1763399970452
+experiment_id: '632157656388572891'
+last_updated_timestamp: 1763399971946
+model_id: m-b0a2693ed4874cacb0bca8a829e5e5ac
+model_type: null
+name: best_estimator
+source_run_id: 966337e7faaf4e3ebc3e53e1ba88e56a
+status: 2
+status_message: null

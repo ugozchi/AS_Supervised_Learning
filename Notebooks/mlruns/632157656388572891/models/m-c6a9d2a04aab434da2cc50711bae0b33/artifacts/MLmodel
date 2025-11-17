@@ -1,0 +1,36 @@
+artifact_path: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/Notebooks/mlruns/632157656388572891/models/m-c6a9d2a04aab434da2cc50711bae0b33/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.13.7
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.7.2
+is_signature_from_type_hint: false
+mlflow_version: 3.6.0
+model_id: m-c6a9d2a04aab434da2cc50711bae0b33
+model_size_bytes: 18269302
+model_uuid: m-c6a9d2a04aab434da2cc50711bae0b33
+prompts: null
+run_id: 966337e7faaf4e3ebc3e53e1ba88e56a
+signature:
+  inputs: '[{"type": "long", "name": "categorieJuridiqueUniteLegale", "required":
+    true}, {"type": "string", "name": "trancheEffectifsUniteLegale", "required": true},
+    {"type": "string", "name": "activitePrincipaleUniteLegale", "required": true},
+    {"type": "string", "name": "categorieEntreprise", "required": true}, {"type":
+    "string", "name": "economieSocialeSolidaireUniteLegale", "required": true}, {"type":
+    "integer", "name": "moisCreation", "required": true}, {"type": "string", "name":
+    "departement", "required": true}, {"type": "string", "name": "trancheEffectifsSiege",
+    "required": true}, {"type": "string", "name": "caractereEmployeurSiege", "required":
+    true}]'
+  outputs: '[{"type": "tensor", "tensor-spec": {"dtype": "int64", "shape": [-1]}}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2025-11-17 17:19:25.087558'

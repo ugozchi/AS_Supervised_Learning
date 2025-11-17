@@ -1,0 +1,1 @@
+OneHotEncoder(handle_unknown='ignore', min_frequency=0.001, sparse_output=False)

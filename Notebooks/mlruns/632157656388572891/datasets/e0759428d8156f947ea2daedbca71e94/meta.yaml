@@ -1,0 +1,15 @@
+digest: 4ec684d9
+name: dataset
+profile: '{"num_rows": 465989, "num_elements": 4193901}'
+schema: '{"mlflow_colspec": [{"type": "long", "name": "categorieJuridiqueUniteLegale",
+  "required": true}, {"type": "string", "name": "trancheEffectifsUniteLegale", "required":
+  true}, {"type": "string", "name": "activitePrincipaleUniteLegale", "required": true},
+  {"type": "string", "name": "categorieEntreprise", "required": true}, {"type": "string",
+  "name": "economieSocialeSolidaireUniteLegale", "required": true}, {"type": "integer",
+  "name": "moisCreation", "required": true}, {"type": "string", "name": "departement",
+  "required": true}, {"type": "string", "name": "trancheEffectifsSiege", "required":
+  true}, {"type": "string", "name": "caractereEmployeurSiege", "required": true}]}'
+source: '{"tags": {"mlflow.user": "ugo", "mlflow.source.name": "/Users/ugo/Documents/Cours/Master/Cours/M1/Supervised
+  Learning/Final Project/.venv/lib/python3.13/site-packages/ipykernel_launcher.py",
+  "mlflow.source.type": "LOCAL"}}'
+source_type: code
