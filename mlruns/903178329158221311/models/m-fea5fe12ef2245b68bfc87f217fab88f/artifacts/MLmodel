@@ -1,0 +1,22 @@
+artifact_path: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/mlruns/903178329158221311/models/m-fea5fe12ef2245b68bfc87f217fab88f/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.pkl
+    predict_fn: predict
+    python_version: 3.14.0
+  sklearn:
+    code: null
+    pickled_model: model.pkl
+    serialization_format: cloudpickle
+    sklearn_version: 1.7.2
+mlflow_version: 3.6.0
+model_id: m-fea5fe12ef2245b68bfc87f217fab88f
+model_size_bytes: 626883
+model_uuid: m-fea5fe12ef2245b68bfc87f217fab88f
+prompts: null
+run_id: 33e7aa00196b40df90dfcc255f4eb09c
+utc_time_created: '2025-11-19 22:01:07.588453'
