@@ -16,7 +16,7 @@ PATH_INPI = os.path.join(PROJECT_ROOT, "Data/raw/ExportDetailBilan.parquet")
 PATH_OUTPUT_EDA = os.path.join(PROJECT_ROOT, "Data/processed/sirene_bilan_EDA.parquet")
 
 # Configuration de la cohorte d'intérêt
-ANNEES_REQUISES = {2015, 2016, 2017, 2018}
+ANNEES_REQUISES = {2016, 2017, 2018, 2019, 2020, 2021, 2022}
 NOMBRE_ANNEES_REQUIS = len(ANNEES_REQUISES)
 
 print("--- Lancement Script 03: Création du Fichier Bilan (Cohorte EDA 4 ans) ---")

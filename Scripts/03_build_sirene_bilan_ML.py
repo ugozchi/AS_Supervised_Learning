@@ -48,7 +48,9 @@ df_ml_prepa = df_bilan_filtre_pl.with_columns([
 # => On garde les observations T=2016 et T=2017.
 df_ml_final = df_ml_prepa.filter(
     pl.col("AnneeClotureExercice").is_in({2016, 2017})
-).drop_nulls(subset=[cible_col, "ResultatNet_T_moins_2"]) # S'assure d'avoir la cible et l'historique T-2
+)
+#.drop_nulls(subset=[cible_col, "ResultatNet_T_moins_2"]) # S'assure d'avoir la cible et l'historique T-2
+
 
 # 4. Sauvegarde
 df_ml_final.write_parquet(OUTPUT_FILE_PATH_ML)
