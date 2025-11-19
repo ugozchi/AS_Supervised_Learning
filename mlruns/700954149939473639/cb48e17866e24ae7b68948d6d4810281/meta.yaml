@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/mlruns/700954149939473639/cb48e17866e24ae7b68948d6d4810281/artifacts
+end_time: 1763586891056
+entry_point_name: ''
+experiment_id: '700954149939473639'
+lifecycle_stage: active
+run_id: cb48e17866e24ae7b68948d6d4810281
+run_name: Iteration_3_RandomForest_Depth15
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1763586812344
+status: 3
+tags: []
+user_id: ugo

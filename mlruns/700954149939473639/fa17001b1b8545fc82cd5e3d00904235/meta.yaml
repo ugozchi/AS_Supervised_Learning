@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/mlruns/700954149939473639/fa17001b1b8545fc82cd5e3d00904235/artifacts
+end_time: 1763587311314
+entry_point_name: ''
+experiment_id: '700954149939473639'
+lifecycle_stage: active
+run_id: fa17001b1b8545fc82cd5e3d00904235
+run_name: Iteration_2_LightGBM_Default
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1763587302300
+status: 3
+tags: []
+user_id: ugo

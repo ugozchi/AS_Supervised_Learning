@@ -1,151 +1,271 @@
-import polars as pl
 import pandas as pd
 import numpy as np
-import xgboost as xgb
-import time
-from sklearn.model_selection import KFold, cross_val_score, train_test_split
-from sklearn.pipeline import Pipeline
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split, KFold, cross_val_score
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.metrics import mean_squared_error, mean_absolute_error, make_scorer
+from sklearn.pipeline import Pipeline
+# Modèles
+from sklearn.linear_model import Ridge
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor 
+from lightgbm import LGBMRegressor 
+# Métriques
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-# --- 0. DÉFINITION GLOBALE DES FONCTIONS ROBUSTES ---
+import mlflow
+import mlflow.sklearn
+import warnings
 
-# Chemin d'accès au fichier ML (ajuster si nécessaire)
-FILE_PATH_ML = "Data/processed/sirene_bilan_ML_prets.parquet" 
-cible_col = "cible_HN_RésultatNet_T_plus_1"
+# Configuration pour une exécution plus propre
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
 
-# Fonction de transformation robuste de la cible (ARCSINH)
-def arcsinh_transform_safe(y):
-    # Transformation recommandée pour les données financières (gains et pertes)
-    # Ajout d'epsilon pour la robustesse près de zéro
-    return np.arcsinh(y + np.finfo(float).eps)
+# --- 1. CONFIGURATION ET PARAMÈTRES ---
+TARGET = 'cible_ResultatNet_T_plus_1'
+DATA_PATH = 'data/processed/sirene_infos_FINAL.parquet'
+RANDOM_STATE = 42
 
-# Fonction d'inverse transformation
-def inv_arcsinh_transform_safe(y_pred_arcsinh):
-    # Inverse de arcsinh
-    return np.sinh(y_pred_arcsinh) - np.finfo(float).eps
+# Colonnes fortement asymétriques à transformer (inclut la cible)
+LOG_TRANSFORM_COLS = [
+    'CJCK_TotalActifBrut', 'HN_RésultatNet', 'DA_TresorerieActive', 
+    'DL_DettesCourtTerme', TARGET
+]
+# Ratios et Ancienneté
+NUMERICAL_FEATURES_SCALED = [
+    'ratio_endettement', 'ratio_tresorerie', 'anciennete_entreprise'
+]
+NUMERICAL_FEATURES_ALL = LOG_TRANSFORM_COLS[:-1] + NUMERICAL_FEATURES_SCALED
 
-# Scoreurs pour la Cross-Validation
-def root_mean_squared_error(y_true, y_pred):
-    # Fonction RMSE avec conversion pour éviter l'overflow
-    return np.sqrt(mean_squared_error(y_true.astype(np.float64), y_pred.astype(np.float64)))
-
-scorer_mae = make_scorer(mean_absolute_error, greater_is_better=False)
-scorer_rmse = make_scorer(root_mean_squared_error, greater_is_better=False)
-
-# Features finales retenues pour le modèle performant
-FEATURES_FINALES = [
-    'ratio_rentabilite_nette', 'ratio_endettement', 'ratio_marge_brute', 
-    'HN_RésultatNet', 'FA_ChiffreAffairesVentes', 
-    'delta_ResultatNet_1an', 'delta_CA_1an', 'ResultatNet_T_moins_1', 'CA_T_moins_1'
+CATEGORICAL_FEATURES = [
+    'trancheEffectifsUniteLegale', 'activitePrincipaleUniteLegale', 
+    'economieSocialeSolidaireUniteLegale', 'departement', 
+    'caractereEmployeurSiege'
 ]
 
+# --- 2. FONCTIONS DE TRANSFORMATION ---
 
-# --- CLASSE PRINCIPALE D'ENTRAÎNEMENT ---
-class FinalModelTrainer:
+def signed_log_transform(x):
+    """Applique une transformation log(1 + |x|) en préservant le signe."""
+    return np.sign(x) * np.log1p(np.abs(x))
+
+def inverse_signed_log_transform(y_pred):
+    """Inverse la transformation pour ramener les prédictions à l'échelle monétaire réelle."""
+    return np.sign(y_pred) * (np.exp(np.abs(y_pred)) - 1)
+
+# --- 3. FONCTIONS DE PIPELINE ---
+
+def load_and_transform_data(file_path):
+    """Charge, consolide, gère les NaNs, puis applique les transformations log."""
+    print(f"Chargement des données depuis : {file_path}")
     
-    def __init__(self):
-        self.kf = KFold(n_splits=5, shuffle=True, random_state=42)
+    try:
+        data = pd.read_parquet(file_path)
+    except FileNotFoundError:
+        print(f"ERREUR: Fichier {file_path} non trouvé. Arrêt.")
+        return None
+
+    # Consolidation : garder la ligne la plus récente pour chaque paire (siren, date_cloture_exercice)
+    data = data.sort_values(by=['siren', 'date_cloture_exercice'], ascending=[True, False])
+    data_consolidated = data.drop_duplicates(
+        subset=['siren', 'date_cloture_exercice'], keep='first'
+    ).reset_index(drop=True)
+    
+    print(f"Données consolidées. Taille : {data_consolidated.shape}")
+    
+    # 1. Gestion des valeurs nulles AVANT la transformation (Corrige l'erreur NaN)
+    ALL_NUMERICAL_TO_IMPUTE = LOG_TRANSFORM_COLS[:-1] + NUMERICAL_FEATURES_SCALED
+    data_consolidated[ALL_NUMERICAL_TO_IMPUTE] = data_consolidated[ALL_NUMERICAL_TO_IMPUTE].fillna(0)
+    data_consolidated[CATEGORICAL_FEATURES] = data_consolidated[CATEGORICAL_FEATURES].fillna('MISSING')
+
+    # Suppression des lignes sans cible (après remplissage des features)
+    data_consolidated.dropna(subset=[TARGET], inplace=True)
+
+    # 2. Application de la Transformation Log-Signée
+    for col in LOG_TRANSFORM_COLS:
+        data_consolidated[col] = signed_log_transform(data_consolidated[col])
         
-    def load_and_prepare_data(self):
-        """Charge, nettoie et transforme les données."""
-        print("Chargement et préparation des données...")
-        try:
-            df_ml = pl.read_parquet(FILE_PATH_ML)
-        except Exception:
-            raise RuntimeError("Erreur de chargement du fichier Parquet.")
+    print("Transformation Log-Signée appliquée aux features financières et à la cible.")
+    return data_consolidated
 
-        df_ml_pd = df_ml.to_pandas()
-        
-        # Application de la transformation ARCSINH à la Cible (Y)
-        Y_full_arcsinh = arcsinh_transform_safe(df_ml_pd[cible_col].astype(np.float64))
+def get_preprocessor(numerical_features, categorical_features):
+    """Crée le ColumnTransformer (StandardScaler pour num, OneHotEncoding pour cat)."""
+    numerical_transformer = Pipeline(steps=[
+        ('scaler', StandardScaler())
+    ])
 
-        # Préparation des Features X
-        X_full = df_ml_pd[FEATURES_FINALES].fillna(0).astype(np.float64) 
-        
-        print(f"Jeu de données prêt : {X_full.shape[0]} observations.")
-        return X_full, Y_full_arcsinh
+    categorical_transformer = Pipeline(steps=[
+        ('onehot', OneHotEncoder(handle_unknown='ignore'))
+    ])
 
-    def build_and_evaluate_pipeline(self, X, Y):
-        """Construit le pipeline (Gradient Boosting) et évalue par CV."""
-        print("\nConstruction du pipeline Gradient Boosting (Modèle Monstre)...")
-        
-        # Pre-processing (StandardScaler)
-        preprocessor = ColumnTransformer(
-            transformers=[('num', StandardScaler(), FEATURES_FINALES)],
-            remainder='passthrough'
-        )
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numerical_transformer, numerical_features),
+            ('cat', categorical_transformer, categorical_features)
+        ],
+        remainder='passthrough'
+    )
+    return preprocessor
 
-        # Modèle Gradient Boosting (similaire à XGBoost mais utilise scikit-learn)
-        # Ces paramètres sont choisis pour la robustesse et la performance.
-        model_gbr = GradientBoostingRegressor(
-            n_estimators=500,  # Nombre d'arbres élevé
-            learning_rate=0.05,
-            max_depth=5,
-            subsample=0.7,
-            random_state=42
-        )
+def evaluate_model(y_true_transformed, y_pred_transformed, model_name):
+    """Calcule les métriques clés, inversant la transformation pour RMSE/MAE."""
+    
+    # Métriques sur l'échelle transformée
+    r2_transformed = r2_score(y_true_transformed, y_pred_transformed)
+    
+    # Inversion de la transformation pour les métriques métier
+    y_true_real = inverse_signed_log_transform(y_true_transformed)
+    y_pred_real = inverse_signed_log_transform(y_pred_transformed)
+    
+    # Métriques sur l'échelle réelle
+    rmse_real = np.sqrt(mean_squared_error(y_true_real, y_pred_real)) 
+    mae_real = mean_absolute_error(y_true_real, y_pred_real)
+    
+    print(f"\n--- Métriques pour {model_name} ---")
+    print(f"R2 Score (Transformé): {r2_transformed:.4f}")
+    print(f"RMSE (Réel): {rmse_real:.2f}")
+    print(f"MAE (Réel): {mae_real:.2f}")
+    
+    return {"rmse_real": rmse_real, "mae_real": mae_real, "r2_transformed": r2_transformed}
 
-        pipeline = Pipeline(steps=[
+def plot_feature_importance(pipeline, X_train, model_name):
+    """Affiche l'importance des features après l'entraînement d'un modèle basé sur les arbres."""
+    
+    if not hasattr(pipeline.named_steps['regressor'], 'feature_importances_'):
+        print(f"Skipping feature importance for {model_name}: Model does not have 'feature_importances_'.")
+        return
+
+    # 1. Obtenir les noms des features après l'encodage OHE
+    feature_names = pipeline.named_steps['preprocessor'].get_feature_names_out()
+    
+    # 2. Récupérer l'importance
+    importances = pipeline.named_steps['regressor'].feature_importances_
+    
+    # 3. Créer un DataFrame et trier
+    feature_importance_df = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
+    feature_importance_df = feature_importance_df.sort_values(by='Importance', ascending=False).head(20) # Top 20
+    
+    # 4. Enregistrer l'importance dans MLflow
+    mlflow.log_dict({"top_20_features": feature_importance_df.to_dict()}, "feature_importance.json")
+    
+    # 5. Visualisation
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x='Importance', y='Feature', data=feature_importance_df)
+    plt.title(f"Top 20 Feature Importance - {model_name}")
+    plt.tight_layout()
+    plt.savefig(f"feature_importance_{model_name}.png")
+    mlflow.log_artifact(f"feature_importance_{model_name}.png")
+    plt.close() # Fermer la figure pour libérer la mémoire
+    
+
+def run_experiment(model, model_name, X_train, y_train, X_test, y_test, preprocessor, cv_folds=5):
+    """Entraîne, évalue, loggue l'expérience et analyse l'importance."""
+    
+    with mlflow.start_run(run_name=model_name) as run:
+        full_pipeline = Pipeline(steps=[
             ('preprocessor', preprocessor),
-            ('regressor', model_gbr)
+            ('regressor', model)
         ])
         
-        # --- Évaluation par Cross-Validation (CV) ---
-        print("Évaluation par 5-Fold Cross-Validation...")
-        start_time = time.time()
+        mlflow.log_params(full_pipeline.named_steps['regressor'].get_params())
         
-        rmse_scores = cross_val_score(pipeline, X, Y, scoring=scorer_rmse, cv=self.kf, n_jobs=-1)
-        mae_scores = cross_val_score(pipeline, X, Y, scoring=scorer_mae, cv=self.kf, n_jobs=-1)
+        # Cross-Validation
+        kf = KFold(n_splits=cv_folds, shuffle=True, random_state=RANDOM_STATE)
+        cv_scores = cross_val_score(full_pipeline, X_train, y_train, cv=kf, scoring='r2', n_jobs=-1)
+        mean_cv_r2 = np.mean(cv_scores)
+        mlflow.log_metric("cv_mean_r2", mean_cv_r2)
         
-        training_time = time.time() - start_time
+        # Entraînement final
+        full_pipeline.fit(X_train, y_train)
         
-        # Calcul des moyennes (multiplié par -1 car les scoreurs sont négatifs)
-        rmse_cv_mean = np.mean(rmse_scores) * -1
-        mae_cv_mean = np.mean(mae_scores) * -1
+        # Prédiction et Évaluation
+        y_pred = full_pipeline.predict(X_test)
+        test_metrics = evaluate_model(y_test, y_pred, model_name)
+        mlflow.log_metrics({f"test_{k}": v for k, v in test_metrics.items()})
         
-        return pipeline, mae_cv_mean, rmse_cv_mean, training_time
-
-    def inverse_transform_and_evaluate(self, pipeline, X_full, Y_full_arcsinh, final_mae_cv, final_rmse_cv, training_time):
-        """Inverse la transformation et affiche les résultats finaux."""
+        # Analyse de l'importance des features (pour modèles arborescents)
+        plot_feature_importance(full_pipeline, X_train, model_name)
         
-        # Entraîner le modèle final sur toutes les données avant la prédiction
-        pipeline.fit(X_full, Y_full_arcsinh)
+        mlflow.sklearn.log_model(full_pipeline, "model")
+        
+        return test_metrics, full_pipeline
 
-        # Prédiction (Arcsih-transformée)
-        Y_pred_arcsinh = pipeline.predict(X_full)
+# --- 4. STRATÉGIE D'ITÉRATION POUR LA FEATURE SELECTION ---
 
-        # Inverse Transformation : Retour aux unités monétaires originales
-        Y_pred_final_unscaled = inv_arcsinh_transform_safe(Y_pred_arcsinh)
-        Y_true_unscaled = inv_arcsinh_transform_safe(Y_full_arcsinh)
+def feature_selection_strategy(best_model_run_id):
+    """
+    Simule la stratégie d'itération basée sur l'importance des features 
+    pour réduire l'Overfitting.
+    """
+    print("\n--- Analyse de la Feature Importance pour la réduction de l'Overfitting ---")
+    
+    # 1. Récupérer l'artefact d'importance du meilleur run
+    # Normalement, on chargerait les données du JSON/DF du meilleur run ici.
+    
+    # 2. Identifier les features à faible importance (ex: les 80% les moins importants)
+    # L'objectif est de réduire la dimensionnalité, surtout après l'OHE.
+    
+    # 3. Créer une nouvelle expérience (Itération 4) avec les features sélectionnées.
+    
+    print("Pour les prochaines itérations, focalisez-vous sur les 10-20 features les plus importantes (issues du plot) et relancez le modèle (XGBoost/LGBM) avec ces features uniquement.")
+    # Ceci nécessite de modifier la liste des NUMERICAL_FEATURES_ALL et CATEGORICAL_FEATURES
+    # dans le script pour l'Itération 4.
 
-        # Affichage des métriques sur les valeurs RÉELLES
-        final_mae_unscaled = mean_absolute_error(Y_true_unscaled, Y_pred_final_unscaled)
-        final_rmse_unscaled = root_mean_squared_error(Y_true_unscaled, Y_pred_final_unscaled)
-
-        print("\n=============================================")
-        print("🏆 MODÈLE MONSTRE FINAL (Gradient Boosting) 🏆")
-        print("=============================================")
-        print(f"TEMPS TOTAL D'ENTRAÎNEMENT CV : {training_time:.2f} secondes")
-        print(f"Features utilisées : Top {len(FEATURES_FINALES)} (Validées par EDA)")
-        print("-" * 45)
-        print(f"  > MAE (Erreur Absolue Moyenne, Unscaled) : {final_mae_unscaled:,.2f}")
-        print(f"  > RMSE (Racine de l'Erreur Quadratique, Unscaled) : {final_rmse_unscaled:,.2f}")
-        print(f"  > MAE (Moyenne CV, Interne) : {final_mae_cv:,.2f} (Confirmé par CV)")
-        print("=============================================")
-
-
-# --- EXÉCUTION DU PIPELINE COMPLET ---
+# --- 5. PIPELINE PRINCIPAL ---
 if __name__ == "__main__":
-    trainer = FinalModelTrainer()
     
-    # 1. Chargement et Transformation
-    X_full, Y_full_arcsinh = trainer.load_and_prepare_data()
+    # 1. Chargement, Consolidation et Transformation
+    data = load_and_transform_data(DATA_PATH)
+    if data is None:
+        exit()
+
+    # 2. Séparation Train-Test
+    COLS_TO_EXCLUDE = [TARGET, 'siren', 'date_cloture_exercice', 'AnneeClotureExercice']
+    X = data.drop(columns=COLS_TO_EXCLUDE)
+    y = data[TARGET]
     
-    # 2. Construction et Évaluation du Pipeline
-    pipeline_final, mae_cv, rmse_cv, training_time = trainer.build_and_evaluate_pipeline(X_full, Y_full_arcsinh)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=RANDOM_STATE, shuffle=True
+    )
+
+    # 3. Préparation du ColumnTransformer
+    preprocessor = get_preprocessor(NUMERICAL_FEATURES_ALL, CATEGORICAL_FEATURES)
     
-    # 3. Affichage des résultats finaux (avec inverse transformation)
-    trainer.inverse_transform_and_evaluate(pipeline_final, X_full, Y_full_arcsinh, mae_cv, rmse_cv, training_time)
+    # 4. Définition des expérimentations
+    
+    experiments = [
+        {'name': 'Baseline_Ridge_LogScale', 
+         'model': Ridge(alpha=1.0, random_state=RANDOM_STATE)}, 
+        
+        {'name': 'Iteration_1_XGBoost_Analysis', 
+         'model': XGBRegressor(n_estimators=150, learning_rate=0.1, random_state=RANDOM_STATE, n_jobs=-1)},
+        
+        {'name': 'Iteration_2_LightGBM_Analysis', 
+         'model': LGBMRegressor(n_estimators=200, learning_rate=0.05, random_state=RANDOM_STATE, n_jobs=-1)},
+    ]
+
+    # 5. Exécution des expérimentations
+    mlflow.set_experiment("Prediction_ResultatNet_Financier_V3_LogTransform_FS")
+    
+    best_r2_transformed = -np.inf
+    best_model_run_id = None
+    
+    for exp in experiments:
+        metrics, pipeline = run_experiment(
+            model=exp['model'],
+            model_name=exp['name'],
+            X_train=X_train, y_train=y_train, 
+            X_test=X_test, y_test=y_test,
+            preprocessor=preprocessor
+        )
+        
+        if metrics['r2_transformed'] > best_r2_transformed:
+            best_r2_transformed = metrics['r2_transformed']
+            best_model_run_id = mlflow.active_run().info.run_id
+            
+    # 6. Stratégie Post-Entraînement
+    feature_selection_strategy(best_model_run_id)
+
+    # Note sur l'erreur MLflow : Supprimer le dossier 'best_model_artifact' avant de relancer.
+    # Pour ne plus avoir l'erreur : utilisez mlflow.register_model() au lieu de save_model()
+    # si vous souhaitez enregistrer le meilleur modèle.

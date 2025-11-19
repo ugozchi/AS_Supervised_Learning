@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/mlruns/324378192097273339/5f520db066c341c8824c6b3a2e8a9218/artifacts
+end_time: 1763587204781
+entry_point_name: ''
+experiment_id: '324378192097273339'
+lifecycle_stage: active
+run_id: 5f520db066c341c8824c6b3a2e8a9218
+run_name: Baseline_Ridge_Regression_LogScale
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1763587203055
+status: 4
+tags: []
+user_id: ugo
