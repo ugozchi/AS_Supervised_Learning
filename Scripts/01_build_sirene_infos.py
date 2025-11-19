@@ -14,12 +14,10 @@ except NameError:
 
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, os.pardir))
 
-# Chemins des fichiers bruts SIRENE
+# Chemins des fichiers
 PATH_UL = os.path.join(PROJECT_ROOT, "Data/raw/StockUniteLegale_utf8.parquet")
 PATH_ETAB = os.path.join(PROJECT_ROOT, "Data/raw/StockEtablissement_utf8.parquet")
 PATH_ETAB_HISTO = os.path.join(PROJECT_ROOT, "Data/raw/StockEtablissementHistorique_utf8.parquet")
-
-# Chemin de sortie pour le jeu de données final, nettoyé et prêt pour le ML
 PATH_OUTPUT_CLEAN = os.path.join(PROJECT_ROOT, "Data/processed/sirene_infos.parquet") 
 
 TODAY = datetime.today().date()
