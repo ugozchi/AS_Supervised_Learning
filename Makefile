@@ -20,8 +20,8 @@ URL_ETAB_HISTO = https://www.data.gouv.fr/api/1/datasets/r/2b3a0c79-f97b-46b8-ac
 URL_INPI = https://static.data.gouv.fr/resources/donnees-financieres-detaillees-des-entreprises-format-parquet/20250916-061220/export-detail-bilan.parquet
 
 # Scripts (Dépendances)
-SCRIPT_SIRENE = Scripts/01_build_sirene_master.py
-SCRIPT_INPI = Scripts/02_build_dna_financial.py
+SCRIPT_SIRENE = Scripts/01_build_sirene_infos.py
+SCRIPT_INPI = Scripts/02_build_sirene_bilan.py
 
 # Fichiers propres (Cibles de Process)
 PROC_SIRENE = $(DIR_PROC)/sirene_infos.parquet
