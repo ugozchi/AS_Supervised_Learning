@@ -1,0 +1,10 @@
+artifact_location: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/mlruns/903178329158221311/models/m-73273f17ca1d4d92aba8a5123ab62384/artifacts
+creation_timestamp: 1763590421318
+experiment_id: '903178329158221311'
+last_updated_timestamp: 1763590422646
+model_id: m-73273f17ca1d4d92aba8a5123ab62384
+model_type: null
+name: model
+source_run_id: e2fac49ea15e44119f72958600ed842b
+status: 2
+status_message: null

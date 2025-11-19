@@ -1,0 +1,14 @@
+artifact_uri: file:///Users/ugo/Documents/Cours/Master/Cours/M1/Supervised%20Learning/Final%20Project/mlruns/903178329158221311/e2fac49ea15e44119f72958600ed842b/artifacts
+end_time: 1763590422649
+entry_point_name: ''
+experiment_id: '903178329158221311'
+lifecycle_stage: active
+run_id: e2fac49ea15e44119f72958600ed842b
+run_name: Iteration_1_XGBoost_Analysis
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1763590418047
+status: 3
+tags: []
+user_id: ugo
