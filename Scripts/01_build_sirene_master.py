@@ -1,23 +1,30 @@
 import polars as pl
-import sys
 import os
+import sys
+from datetime import datetime
 
-# --- 1. GESTION DES CHEMINS ---
-# Permet au script de s'exécuter depuis le Makefile
+# --- 1. GESTION DES CHEMINS & CONFIG ---
+
 try:
+    # Permet au script de s'exécuter depuis le Makefile ou directement
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 except NameError:
-    SCRIPT_DIR = os.path.join(os.getcwd(), "Scripts") # Si on teste dans un notebook
+    # Pour un test dans un notebook si nécessaire, mais l'usage principal est en script
+    SCRIPT_DIR = os.path.join(os.getcwd(), "Scripts") 
 
 PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, os.pardir))
 
-
+# Chemins des fichiers bruts SIRENE
 PATH_UL = os.path.join(PROJECT_ROOT, "Data/raw/StockUniteLegale_utf8.parquet")
 PATH_ETAB = os.path.join(PROJECT_ROOT, "Data/raw/StockEtablissement_utf8.parquet")
 PATH_ETAB_HISTO = os.path.join(PROJECT_ROOT, "Data/raw/StockEtablissementHistorique_utf8.parquet")
-PATH_OUTPUT = os.path.join(PROJECT_ROOT, "Data/processed/sirene_infos.parquet") # Cible du Makefile
 
-print("--- Lancement Script 01: Création du MASTER FILE SIRENE ---")
+# Chemin de sortie pour le jeu de données final, nettoyé et prêt pour le ML
+PATH_OUTPUT_CLEAN = os.path.join(PROJECT_ROOT, "Data/processed/sirene_infos.parquet") 
+
+TODAY = datetime.today().date()
+
+print("--- Lancement Script 02: Création du Jeu de Données ML Final ---")
 
 # --- 2. VÉRIFICATION DES FICHIERS ---
 for path in [PATH_UL, PATH_ETAB, PATH_ETAB_HISTO]:
@@ -27,80 +34,62 @@ for path in [PATH_UL, PATH_ETAB, PATH_ETAB_HISTO]:
         sys.exit(1)
 
 # ===================================================================
-# ÉTAPE 1: La Base (FEATURES X) - Fichier 'StockUniteLegale'
+# ÉTAPES 1 à 3: Définition des DataFrames Lazy
 # ===================================================================
-print("Étape 1: Lecture des features de 'StockUniteLegale'...")
+
+## ÉTAPE 1: Unités Légales (Base Features)
+print("1. Définition des features de 'StockUniteLegale'...")
 df_base_features = pl.scan_parquet(PATH_UL).select(
     "siren",
     "dateCreationUniteLegale",
     "categorieJuridiqueUniteLegale",
     "trancheEffectifsUniteLegale",
     "activitePrincipaleUniteLegale",
-    "categorieEntreprise",
-    "economieSocialeSolidaireUniteLegale",
-    "societeMissionUniteLegale"
+    "categorieEntreprise",                 
+    "economieSocialeSolidaireUniteLegale", 
+    "societeMissionUniteLegale"           
 )
 
-# ===================================================================
-# ÉTAPE 2: Trouver le SIRET du Siège (HQ) - Fichier 'StockEtablissement'
-# ===================================================================
-print("Étape 2: Lecture de 'StockEtablissement' pour trouver les sièges...")
-print(f"DEBUG: Chemin utilisé = {PATH_ETAB}")
-
-# Vérification des colonnes disponibles (debug)
-try:
-    test_cols = pl.scan_parquet(PATH_ETAB).collect_schema()
-    print(f"DEBUG: Nombre de colonnes dans le fichier = {len(test_cols.names())}")
-    
-    # Vérifiez si etablissementSiege existe
-    if "etablissementSiege" not in test_cols.names():
-        print("ERREUR: La colonne 'etablissementSiege' n'existe pas dans ce fichier!")
-        print("Colonnes disponibles:", test_cols.names()[:20])  # Affiche les 20 premières
-        sys.exit(1)
-    else:
-        print("DEBUG: Colonne 'etablissementSiege' trouvée ✓")
-        
-except Exception as e:
-    print(f"ERREUR lors de la vérification du schéma: {e}", file=sys.stderr)
-    sys.exit(1)
-
-# Lecture des sièges
+## ÉTAPE 2: Établissements (Sièges sociaux)
+print("2. Définition des features de 'StockEtablissement' (Sièges)...")
 df_sieges = pl.scan_parquet(PATH_ETAB).filter(
     pl.col("etablissementSiege") == True
 ).select(
     "siren", 
     "siret",
-    pl.col("codePostalEtablissement").str.slice(0, 2).alias("departement")
+    pl.col("codePostalEtablissement").str.slice(0, 2).alias("departement"),
+    pl.col("trancheEffectifsEtablissement").alias("trancheEffectifsSiege"),
+    pl.col("caractereEmployeurEtablissement").alias("caractereEmployeurSiege")
 )
 
-# ===================================================================
-# ÉTAPE 3: Trouver la Date de Fermeture (La Cible Y) - Fichier 'StockEtablissementHistorique'
-# ===================================================================
-print("Étape 3: Lecture de 'StockEtablissementHistorique' pour trouver les 'morts'...")
-print(f"DEBUG: Chemin utilisé = {PATH_ETAB_HISTO}")
-
+## ÉTAPE 3: Fermetures
+print("3. Définition de la date de fermeture ('StockEtablissementHistorique')...")
 df_fermetures = pl.scan_parquet(PATH_ETAB_HISTO).filter(
     pl.col("etatAdministratifEtablissement") == 'F'
 ).select(
     "siret",
     pl.col("dateFin").alias("dateFermeture")
 ).group_by("siret").agg(
-    pl.col("dateFermeture").max() # On prend la date de fermeture la plus récente
+    pl.col("dateFermeture").max() 
 )
 
-# ===================================================================
-# ÉTAPE 4: Le "Grand Mariage" SIRENE
-# ===================================================================
-print("Étape 4: Jointure finale des 3 tables...")
-df_master = df_base_features.join(df_sieges, on="siren", how="left")
-df_master = df_master.join(df_fermetures, on="siret", how="left")
 
 # ===================================================================
-# ÉTAPE 5: Sauvegarde
+# ÉTAPE 4: Le "Grand Mariage" Lazy (JOIN)
 # ===================================================================
-print(f"Sauvegarde du Master File SIRENE dans {PATH_OUTPUT}...")
-df_final = df_master.select(
+print("4. Jointure lazy des 3 tables...")
+df_master_lazy = df_base_features.join(df_sieges, on="siren", how="left")
+df_master_lazy = df_master_lazy.join(df_fermetures, on="siret", how="left")
+
+
+# ===================================================================
+# ÉTAPE 5: ENRICHISSEMENT (Feature Engineering)
+# ===================================================================
+print("5. Enrichissement des features (année/mois de création)...")
+df_final_lazy = df_master_lazy.select(
+    # Les Colonnes à garder pour la suite du traitement
     "siren",
+    "siret", # Garder pour la vérification mais peut être droppé plus tard
     "dateCreationUniteLegale",
     "dateFermeture",
     "categorieJuridiqueUniteLegale",
@@ -109,19 +98,102 @@ df_final = df_master.select(
     "categorieEntreprise",
     "economieSocialeSolidaireUniteLegale",
     "societeMissionUniteLegale",
-    "departement"
+    "departement",
+    "trancheEffectifsSiege",
+    "caractereEmployeurSiege"
+).with_columns([
+    # Ajout des features Année/Mois de création
+    pl.col("dateCreationUniteLegale").dt.year().alias("anneeCreation"),
+    pl.col("dateCreationUniteLegale").dt.month().alias("moisCreation"),
+])
+
+
+# ===================================================================
+# ÉTAPE 6: NETTOYAGE DES DONNÉES (Filtrage des incohérences)
+# ===================================================================
+print("6. Nettoyage des dates incohérentes et des NULL critiques...")
+
+# 6.1. Drop des NULLs sur les features critiques
+CRITICAL_COLS_FOR_NULL_DROP = [
+    "departement", 
+    "dateCreationUniteLegale", 
+    "activitePrincipaleUniteLegale", 
+    "trancheEffectifsUniteLegale",
+    "categorieEntreprise",
+    "caractereEmployeurSiege"
+]
+df_cleaned_lazy = df_final_lazy.drop_nulls(subset=CRITICAL_COLS_FOR_NULL_DROP)
+
+# 6.2. Filtrage des dates de création/fermeture (>= 1970 et cohérentes)
+df_cleaned_lazy = df_cleaned_lazy.filter(
+    # Date de création doit être >= 1970 et <= Aujourd'hui
+    (pl.col("dateCreationUniteLegale").dt.year() >= 1970) & 
+    (pl.col("dateCreationUniteLegale") <= pl.lit(TODAY))
+).filter(
+    # Date de fermeture (si elle existe) doit être > date de création et < Aujourd'hui
+    ( pl.col("dateFermeture").is_null() ) | 
+    ( (pl.col("dateFermeture") > pl.col("dateCreationUniteLegale")) & 
+      (pl.col("dateFermeture") < pl.lit(TODAY)) )
 )
 
-# On s'assure que le dossier 'processed' existe
-os.makedirs(os.path.dirname(PATH_OUTPUT), exist_ok=True)
 
-# On collecte et on sauvegarde
-print("DEBUG: Début de la collecte des données...")
+# ===================================================================
+# ÉTAPE 7: CRÉATION DE LA VARIABLE CIBLE (Target Y)
+# ===================================================================
+print("7. Création de la Cible (is_failed_in_3y)...")
+
+df_target_lazy = df_cleaned_lazy.with_columns(
+    # 7.1. Calcul de la date limite (Création + 3 ans)
+    (pl.col("dateCreationUniteLegale").dt.offset_by("3y")).alias("date_limite_3_ans")
+).with_columns(
+    # 7.2. Calcul de la Cible is_failed_in_3y
+    pl.when(
+        (pl.col("dateFermeture").is_not_null()) & # Fermé
+        (pl.col("dateFermeture") < pl.col("date_limite_3_ans")) # AVANT la date limite de 3 ans
+    ).then(1)
+    .otherwise(0)
+    .alias("is_failed_in_3y")
+)
+
+# 7.3. Nettoyage final des colonnes restantes (features catégorielles avec NULL)
+# On choisit les colonnes finales et on remplit les NULL restants (sièges, mission, ESS)
+COLS_FINAL = [
+    "siren", "siret",
+    "dateCreationUniteLegale", "dateFermeture", "is_failed_in_3y", # Target + Clés
+    "categorieJuridiqueUniteLegale", "trancheEffectifsUniteLegale", 
+    "activitePrincipaleUniteLegale", "categorieEntreprise",
+    "economieSocialeSolidaireUniteLegale", "societeMissionUniteLegale",
+    "anneeCreation", "moisCreation", "departement",
+    "trancheEffectifsSiege", "caractereEmployeurSiege"
+]
+
+df_ml_ready_lazy = df_target_lazy.select(COLS_FINAL).fill_null("INCONNU")
+
+# ===================================================================
+# ÉTAPE 8: COLLECTE ET SAUVEGARDE FINALE
+# ===================================================================
+print("8. Collecte et sauvegarde du Master File ML final...")
+
+# On s'assure que le dossier 'processed' existe
+os.makedirs(os.path.dirname(PATH_OUTPUT_CLEAN), exist_ok=True)
+
 try:
-    df_collected = df_final.collect()
-    print(f"DEBUG: {len(df_collected)} lignes collectées")
-    df_collected.write_parquet(PATH_OUTPUT)
-    print(f"--- Script 01 (Master File SIRENE) Terminé avec Succès ---")
+    # On force l'exécution de toute la pipeline lazy ici
+    df_collected = df_ml_ready_lazy.collect()
+    
+    # Suppression des colonnes intermédiaires/non nécessaires au modèle final
+    df_collected = df_collected.drop(["siret"])
+    
+    # Sauvegarde
+    df_collected.write_parquet(PATH_OUTPUT_CLEAN)
+    
+    print(f"\n--- Script 02 (Master File ML) Terminé avec Succès ---")
+    print(f"Fichier créé : {PATH_OUTPUT_CLEAN}")
+    print(f"Shape finale : {df_collected.shape}")
+    print(f"Répartition de la Cible (is_failed_in_3y) :\n{df_collected.get_column('is_failed_in_3y').value_counts()}")
+    print("\nAperçu du DataFrame final :")
+    print(df_collected.head())
+
 except Exception as e:
     print(f"ERREUR lors de la collecte/sauvegarde: {e}", file=sys.stderr)
     sys.exit(1)
