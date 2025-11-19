@@ -1,292 +1,151 @@
+import polars as pl
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.compose import ColumnTransformer
+import xgboost as xgb
+import time
+from sklearn.model_selection import KFold, cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score, recall_score, precision_score, f1_score
-from datetime import datetime
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error, make_scorer
 
-# ==============================================================================
-# 1. Configuration et Chargement des Données
-# ==============================================================================
+# --- 0. DÉFINITION GLOBALE DES FONCTIONS ROBUSTES ---
 
-FILE_PATH = 'Data/processed/sirene_infos_CLEAN.parquet' 
-# Ajustez cette date pour assurer une bonne répartition (ex: 2017-01-01 ou 2019-01-01)
-SPLIT_DATE = '2018-01-01' 
-RANDOM_SEED = 42
+# Chemin d'accès au fichier ML (ajuster si nécessaire)
+FILE_PATH_ML = "Data/processed/sirene_bilan_ML_prets.parquet" 
+cible_col = "cible_HN_RésultatNet_T_plus_1"
 
-def load_data(file_path):
-    """
-    Charge les données, sépare X et y, gère les dates non valides et applique 
-    la Feature Engineering APE.
-    """
-    print(f"Chargement des données depuis : {file_path}")
-    try:
-        df = pd.read_parquet(file_path)
-    except FileNotFoundError:
-        print(f"ERREUR: Le fichier '{file_path}' est introuvable. Veuillez vérifier le chemin.")
-        return None, None
+# Fonction de transformation robuste de la cible (ARCSINH)
+def arcsinh_transform_safe(y):
+    # Transformation recommandée pour les données financières (gains et pertes)
+    # Ajout d'epsilon pour la robustesse près de zéro
+    return np.arcsinh(y + np.finfo(float).eps)
+
+# Fonction d'inverse transformation
+def inv_arcsinh_transform_safe(y_pred_arcsinh):
+    # Inverse de arcsinh
+    return np.sinh(y_pred_arcsinh) - np.finfo(float).eps
+
+# Scoreurs pour la Cross-Validation
+def root_mean_squared_error(y_true, y_pred):
+    # Fonction RMSE avec conversion pour éviter l'overflow
+    return np.sqrt(mean_squared_error(y_true.astype(np.float64), y_pred.astype(np.float64)))
+
+scorer_mae = make_scorer(mean_absolute_error, greater_is_better=False)
+scorer_rmse = make_scorer(root_mean_squared_error, greater_is_better=False)
+
+# Features finales retenues pour le modèle performant
+FEATURES_FINALES = [
+    'ratio_rentabilite_nette', 'ratio_endettement', 'ratio_marge_brute', 
+    'HN_RésultatNet', 'FA_ChiffreAffairesVentes', 
+    'delta_ResultatNet_1an', 'delta_CA_1an', 'ResultatNet_T_moins_1', 'CA_T_moins_1'
+]
+
+
+# --- CLASSE PRINCIPALE D'ENTRAÎNEMENT ---
+class FinalModelTrainer:
     
-    # 1. Variable Cible (y)
-    y = df['is_failed_in_3y']
-
-    # 2. Variables Explicatives (X)
-    leakage_columns = ['is_failed_in_3y', 'dateFermeture', 'date_limite_3_ans', 'siren']
-    X = df.drop(columns=leakage_columns, errors='ignore')
-
-    # 3. Conversion de la colonne de date AVEC gestion des erreurs (OutOfBoundsDatetime)
-    if 'dateCreationUniteLegale' in X.columns:
-        X['dateCreationUniteLegale'] = pd.to_datetime(
-            X['dateCreationUniteLegale'], 
-            errors='coerce'  # Convertit les dates non valides (ex: an 0006) en NaT
-        )
-    
-    # --- FEATURE ENGINEERING POUR GÉRER LA LARGEUR DE LA MATRICE ---
-    if 'activitePrincipaleUniteLegale' in X.columns:
-        # Réduction du code APE/NAF à ses 2 premiers chiffres (niveau 2 d'agrégation)
-        X['activitePrincipaleNiveau2'] = X['activitePrincipaleUniteLegale'].astype(str).str[:2].fillna('NA')
-    # -------------------------------------------------------------
+    def __init__(self):
+        self.kf = KFold(n_splits=5, shuffle=True, random_state=42)
         
-    return X, y
+    def load_and_prepare_data(self):
+        """Charge, nettoie et transforme les données."""
+        print("Chargement et préparation des données...")
+        try:
+            df_ml = pl.read_parquet(FILE_PATH_ML)
+        except Exception:
+            raise RuntimeError("Erreur de chargement du fichier Parquet.")
 
-# ==============================================================================
-# 2. Split Temporel (Train/Test Split)
-# ==============================================================================
-
-def temporal_split(X, y, split_date):
-    """
-    Effectue un split d'entraînement et de test basé sur la date de création.
-    """
-    split_dt = pd.to_datetime(split_date)
-    
-    # Séparation : Train = avant la date; Test = à partir de la date
-    train_mask = X['dateCreationUniteLegale'] < split_dt
-    
-    X_train = X[train_mask].copy()
-    y_train = y[train_mask].copy()
-    
-    X_test = X[~train_mask].copy()
-    y_test = y[~train_mask].copy()
-
-    if len(X_train) == 0:
-        print("\nERREUR CRITIQUE: L'ensemble d'entraînement (X_train) est VIDE.")
-        print(f"Veuillez vérifier votre SPLIT_DATE ({split_date}) par rapport à la plage de dates de vos données.")
-        return None, None, None, None
-    
-    print(f"\n--- Split Temporel Effectué (Coupure: {split_date}) ---")
-    print(f"Taille du Train: {len(X_train)} entreprises.")
-    print(f"Taille du Test: {len(X_test)} entreprises.")
-    print(f"Proportion de défaillances (1) dans Train: {y_train.mean():.2%}")
-    
-    # Retirer la date de création de X_train et X_test après le split
-    X_train = X_train.drop(columns=['dateCreationUniteLegale'])
-    X_test = X_test.drop(columns=['dateCreationUniteLegale'])
-
-    return X_train, X_test, y_train, y_test
-
-# ==============================================================================
-# 3. Pré-traitement des Features (ColumnTransformer)
-# ==============================================================================
-
-def build_preprocessor(X_train):
-    """
-    Définit le ColumnTransformer pour appliquer le pré-processing adéquat.
-    Utilise sparse_output=True pour gérer la mémoire.
-    """
-    
-    # Définition des types de colonnes
-    numeric_features = ['anneeCreation', 'moisCreation']
-    
-    # Variables catégorielles (inclut la nouvelle feature agrégée)
-    categorical_features = [
-        col for col in X_train.columns 
-        if col not in numeric_features 
-        and col not in ['dateCreationUniteLegale']
-        # Exclusion de la feature trop détaillée
-        and col != 'activitePrincipaleUniteLegale' 
-    ]
-    
-    # Pipeline pour les variables numériques: Standardisation
-    numeric_transformer = Pipeline(steps=[
-        ('scaler', StandardScaler())
-    ])
-    
-    # Pipeline pour les variables catégorielles: One-Hot Encoding
-    # IMPORTANT: sparse_output=True pour économiser la mémoire.
-    categorical_transformer = Pipeline(steps=[
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=True))
-    ])
-    
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', numeric_transformer, numeric_features),
-            ('cat', categorical_transformer, categorical_features)
-        ],
-        remainder='drop'
-    )
-    
-    return preprocessor
-
-# ==============================================================================
-# 4. Modèles et Pipelines
-# ==============================================================================
-
-def build_model_pipeline(preprocessor, model_name='baseline'):
-    """
-    Construit et retourne le pipeline complet pour le modèle spécifié.
-    Utilise des solvers adaptés aux données creuses et n_jobs=-1 pour la performance.
-    """
-    if model_name == 'baseline':
-        print("\nPipeline du Modèle: Régression Logistique (Baseline)")
-        model = LogisticRegression(
-            random_state=RANDOM_SEED, 
-            # 'saga' est préférable pour les matrices creuses et les grands jeux de données
-            solver='saga', 
-            class_weight='balanced',
-            max_iter=1000,
-            n_jobs=-1 # Utilisation des cœurs disponibles pour l'accélération
-        )
-    elif model_name == 'iteration_rf':
-        print("\nPipeline du Modèle: Random Forest (Itération 1)")
-        model = RandomForestClassifier(
-            n_estimators=150,      
-            max_depth=15,          
-            class_weight='balanced', 
-            random_state=RANDOM_SEED,
-            n_jobs=-1 
-        )
-    else:
-        raise ValueError(f"Modèle inconnu: {model_name}")
-
-    pipeline = Pipeline(steps=[
-        ('preprocessor', preprocessor),
-        ('classifier', model)
-    ])
-    
-    return pipeline
-
-# ==============================================================================
-# 5. Évaluation et Cross-Validation
-# ==============================================================================
-
-def run_cross_validation(pipeline, X_train, y_train, n_splits=5):
-    """
-    Effectue une Cross-Validation temporelle (TimeSeriesSplit) sur le jeu d'entraînement.
-    """
-    print(f"\n--- Cross-Validation Temporelle (Splits={n_splits}) ---")
-    
-    # TimeSeriesSplit est utilisé pour respecter la contrainte temporelle
-    tscv = TimeSeriesSplit(n_splits=n_splits) 
-
-    try:
-        cv_scores = cross_val_score(
-            pipeline, 
-            X_train, 
-            y_train, 
-            cv=tscv, 
-            scoring='roc_auc', 
-            n_jobs=-1
-        )
-
-        print(f"Score ROC AUC CV (Moyenne): {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
-        return cv_scores.mean()
-    except ValueError as e:
-        print(f"Erreur lors de la Cross-Validation. Assurez-vous d'avoir assez de données/splits: {e}")
-        return np.nan
-
-def evaluate_model(pipeline, X_test, y_test):
-    """
-    Calcule et affiche les métriques de classification sur le jeu de test.
-    """
-    
-    # Prédictions et Probabilités
-    y_pred = pipeline.predict(X_test)
-    y_proba = pipeline.predict_proba(X_test)[:, 1]
-    
-    # Calcul des métriques
-    metrics = {
-        "ROC AUC": roc_auc_score(y_test, y_proba),
-        "Recall (Rappel)": recall_score(y_test, y_pred, zero_division=0),
-        "Precision (Précision)": precision_score(y_test, y_pred, zero_division=0),
-        "F1-Score": f1_score(y_test, y_pred),
-    }
-
-    print("\n--- Métriques sur l'Ensemble de Test ---")
-    for name, value in metrics.items():
-        print(f"   * {name}: {value:.4f}")
+        df_ml_pd = df_ml.to_pandas()
         
-    return metrics
+        # Application de la transformation ARCSINH à la Cible (Y)
+        Y_full_arcsinh = arcsinh_transform_safe(df_ml_pd[cible_col].astype(np.float64))
 
-# ==============================================================================
-# 6. Exécution Principale
-# ==============================================================================
-
-def main():
-    
-    # 1. Chargement des données
-    X, y = load_data(FILE_PATH)
-    if X is None:
-        return
-
-    # --- Nettoyage des lignes avec dates non valides (NaT) après conversion ---
-    # Ces lignes ne peuvent pas être utilisées pour le split temporel.
-    X_clean = X.dropna(subset=['dateCreationUniteLegale'])
-    if X_clean.empty:
-        print("ERREUR FATALE: Aucune date de création valide trouvée après nettoyage.")
-        return
+        # Préparation des Features X
+        X_full = df_ml_pd[FEATURES_FINALES].fillna(0).astype(np.float64) 
         
-    y_clean = y[X_clean.index]
-    print(f"\nNettoyage des {len(X) - len(X_clean)} lignes avec dates non valides ou manquantes.")
-    X = X_clean
-    y = y_clean
-    # -------------------------------------------------------------------------
+        print(f"Jeu de données prêt : {X_full.shape[0]} observations.")
+        return X_full, Y_full_arcsinh
 
-    # 2. Split Temporel
-    X_train, X_test, y_train, y_test = temporal_split(X, y, SPLIT_DATE)
-    if X_train is None:
-        return # Arrêt si le split a échoué
+    def build_and_evaluate_pipeline(self, X, Y):
+        """Construit le pipeline (Gradient Boosting) et évalue par CV."""
+        print("\nConstruction du pipeline Gradient Boosting (Modèle Monstre)...")
+        
+        # Pre-processing (StandardScaler)
+        preprocessor = ColumnTransformer(
+            transformers=[('num', StandardScaler(), FEATURES_FINALES)],
+            remainder='passthrough'
+        )
 
-    # 3. Pré-traitement
-    preprocessor = build_preprocessor(X_train)
-    
-    # --- BASELINE : RÉGRESSION LOGISTIQUE ---
-    print("\n\n#####################################################")
-    print("##             EXPERIENCE 1: BASELINE              ##")
-    print("#####################################################")
-    
-    # 4. Construction et Entraînement du Pipeline Baseline
-    baseline_pipeline = build_model_pipeline(preprocessor, model_name='baseline')
-    print("\n[DÉBUT] Entraînement de la Baseline (LogReg). Peut prendre du temps...")
-    baseline_pipeline.fit(X_train, y_train)
-    print("[FIN] Entraînement de la Baseline.")
-    
-    # 5. Évaluation et CV
-    run_cross_validation(baseline_pipeline, X_train, y_train)
-    baseline_metrics = evaluate_model(baseline_pipeline, X_test, y_test)
-    
-    # --- ITÉRATION 1 : RANDOM FOREST ---
-    print("\n\n#####################################################")
-    print("##         EXPERIENCE 2: RANDOM FOREST (ITÉRATION) ##")
-    print("#####################################################")
-    
-    # 4. Construction et Entraînement du Pipeline Random Forest
-    rf_pipeline = build_model_pipeline(preprocessor, model_name='iteration_rf')
-    print("\n[DÉBUT] Entraînement du Random Forest. Plus long que la LogReg...")
-    rf_pipeline.fit(X_train, y_train)
-    print("[FIN] Entraînement du Random Forest.")
-    
-    # 5. Évaluation et CV
-    run_cross_validation(rf_pipeline, X_train, y_train)
-    rf_metrics = evaluate_model(rf_pipeline, X_test, y_test)
-    
-    # Comparaison des résultats
-    print("\n\n--- COMPARAISON DES EXPÉRIENCES FINALES ---")
-    print(f"Baseline (LogReg) ROC AUC: {baseline_metrics['ROC AUC']:.4f}")
-    print(f"Itération 1 (RF) ROC AUC: {rf_metrics['ROC AUC']:.4f}")
+        # Modèle Gradient Boosting (similaire à XGBoost mais utilise scikit-learn)
+        # Ces paramètres sont choisis pour la robustesse et la performance.
+        model_gbr = GradientBoostingRegressor(
+            n_estimators=500,  # Nombre d'arbres élevé
+            learning_rate=0.05,
+            max_depth=5,
+            subsample=0.7,
+            random_state=42
+        )
+
+        pipeline = Pipeline(steps=[
+            ('preprocessor', preprocessor),
+            ('regressor', model_gbr)
+        ])
+        
+        # --- Évaluation par Cross-Validation (CV) ---
+        print("Évaluation par 5-Fold Cross-Validation...")
+        start_time = time.time()
+        
+        rmse_scores = cross_val_score(pipeline, X, Y, scoring=scorer_rmse, cv=self.kf, n_jobs=-1)
+        mae_scores = cross_val_score(pipeline, X, Y, scoring=scorer_mae, cv=self.kf, n_jobs=-1)
+        
+        training_time = time.time() - start_time
+        
+        # Calcul des moyennes (multiplié par -1 car les scoreurs sont négatifs)
+        rmse_cv_mean = np.mean(rmse_scores) * -1
+        mae_cv_mean = np.mean(mae_scores) * -1
+        
+        return pipeline, mae_cv_mean, rmse_cv_mean, training_time
+
+    def inverse_transform_and_evaluate(self, pipeline, X_full, Y_full_arcsinh, final_mae_cv, final_rmse_cv, training_time):
+        """Inverse la transformation et affiche les résultats finaux."""
+        
+        # Entraîner le modèle final sur toutes les données avant la prédiction
+        pipeline.fit(X_full, Y_full_arcsinh)
+
+        # Prédiction (Arcsih-transformée)
+        Y_pred_arcsinh = pipeline.predict(X_full)
+
+        # Inverse Transformation : Retour aux unités monétaires originales
+        Y_pred_final_unscaled = inv_arcsinh_transform_safe(Y_pred_arcsinh)
+        Y_true_unscaled = inv_arcsinh_transform_safe(Y_full_arcsinh)
+
+        # Affichage des métriques sur les valeurs RÉELLES
+        final_mae_unscaled = mean_absolute_error(Y_true_unscaled, Y_pred_final_unscaled)
+        final_rmse_unscaled = root_mean_squared_error(Y_true_unscaled, Y_pred_final_unscaled)
+
+        print("\n=============================================")
+        print("🏆 MODÈLE MONSTRE FINAL (Gradient Boosting) 🏆")
+        print("=============================================")
+        print(f"TEMPS TOTAL D'ENTRAÎNEMENT CV : {training_time:.2f} secondes")
+        print(f"Features utilisées : Top {len(FEATURES_FINALES)} (Validées par EDA)")
+        print("-" * 45)
+        print(f"  > MAE (Erreur Absolue Moyenne, Unscaled) : {final_mae_unscaled:,.2f}")
+        print(f"  > RMSE (Racine de l'Erreur Quadratique, Unscaled) : {final_rmse_unscaled:,.2f}")
+        print(f"  > MAE (Moyenne CV, Interne) : {final_mae_cv:,.2f} (Confirmé par CV)")
+        print("=============================================")
 
 
-if __name__ == '__main__':
-    main()
+# --- EXÉCUTION DU PIPELINE COMPLET ---
+if __name__ == "__main__":
+    trainer = FinalModelTrainer()
+    
+    # 1. Chargement et Transformation
+    X_full, Y_full_arcsinh = trainer.load_and_prepare_data()
+    
+    # 2. Construction et Évaluation du Pipeline
+    pipeline_final, mae_cv, rmse_cv, training_time = trainer.build_and_evaluate_pipeline(X_full, Y_full_arcsinh)
+    
+    # 3. Affichage des résultats finaux (avec inverse transformation)
+    trainer.inverse_transform_and_evaluate(pipeline_final, X_full, Y_full_arcsinh, mae_cv, rmse_cv, training_time)

@@ -1,0 +1,35 @@
+{
+  "experiment_name": "baseline_ridge",
+  "timestamp": "20251119_192216",
+  "features": [
+    "FA_ChiffreAffairesVentes",
+    "HN_R\u00e9sultatNet",
+    "DF_CapitauxPropres",
+    "CJCK_TotalActifBrut"
+  ],
+  "n_features": 4,
+  "train_samples": 23968,
+  "test_samples": 5992,
+  "model_type": "Ridge",
+  "model_params": {
+    "alpha": 1.0,
+    "copy_X": true,
+    "fit_intercept": true,
+    "max_iter": null,
+    "positive": false,
+    "random_state": 42,
+    "solver": "auto",
+    "tol": 0.0001
+  },
+  "metrics": {
+    "cv_mae_mean": 613901.7252665279,
+    "cv_mae_std": 201372.5032815274,
+    "cv_r2_mean": -1.1360315697567613,
+    "cv_r2_std": 1.3281297484155443,
+    "test_mae": 432455.3604019572,
+    "test_rmse": 4753141.553005821,
+    "test_r2": 0.5333220748428198,
+    "test_mape": 10.503488405606115,
+    "test_median_ae": 40119.18399909418
+  }
+}
