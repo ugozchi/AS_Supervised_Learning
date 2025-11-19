@@ -21,7 +21,7 @@ URL_INPI = https://static.data.gouv.fr/resources/donnees-financieres-detaillees-
 
 # Scripts (Dépendances)
 SCRIPT_SIRENE = Scripts/01_build_sirene_infos.py
-SCRIPT_INPI = Scripts/02_build_sirene_bilan.py
+SCRIPT_INPI = Scripts/02_build_sirene_bilan_EDA.py
 
 # Fichiers propres (Cibles de Process)
 PROC_SIRENE = $(DIR_PROC)/sirene_infos.parquet
