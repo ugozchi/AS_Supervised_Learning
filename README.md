@@ -96,7 +96,10 @@ Exécute les 3 scripts de preprocessing et génère les fichiers finaux dans `Da
 
 ```bash
 source .venv/bin/activate
-python main.py
+```
+
+```bash
+python3 main.py
 ```
 
 Le script `main.py` :
