@@ -1,19 +1,6 @@
-# AS_Supervised_Learning
-
-URL_UL = https://www.data.gouv.fr/api/1/datasets/r/a29c1297-1f92-4e2a-8f6b-8c902ce96c5f
-
-URL_ETAB = https://www.data.gouv.fr/api/1/datasets/r/2b3a0c79-f97b-46b8-ac02-8be6c1f01a8c
-
-URL_ETAB_HISTO = https://www.data.gouv.fr/api/1/datasets/r/350182c9-148a-46e0-8389-76c2ec1374a3
-
-URL_INPI = https://www.data.gouv.fr/api/1/datasets/r/c4ac8f98-2c92-4417-9070-0cbb9de03875
-
-https://www.data.gouv.fr/api/1/datasets/r/c4ac8f98-2c97-4417-9070-0cbb9de03875
-
-
 # Supervised Learning - Prédiction du Résultat Net des Entreprises Françaises
 
-**Contributeurs :** Thomas [NOM À COMPLÉTER], [PRÉNOM NOM BINÔME]
+**Contributeurs :** Alaphilippe Thomas, Gilhodes Nicolas, Zanchi Ugo
 
 ---
 
@@ -43,11 +30,13 @@ Prédire le **résultat net (N+1)** des entreprises françaises à partir de leu
 Le dataset combine deux sources officielles françaises :
 
 1. **Base SIRENE (INSEE)** : données démographiques des entreprises
-   - URL : [data.gouv.fr - SIRENE](https://www.data.gouv.fr)
+   - URL : [data.gouv.fr - SIRENE]([https://www.data.gouv.fr](https://www.data.gouv.fr/api/1/datasets/r/a29c1297-1f92-4e2a-8f6b-8c902ce96c5f)
+   - URL : [data.gouv.fr - SIRENE]([https://www.data.gouv.fr](https://www.data.gouv.fr/api/1/datasets/r/2b3a0c79-f97b-46b8-ac02-8be6c1f01a8c)
+   - URL : [data.gouv.fr - SIRENE]([https://www.data.gouv.fr](https://www.data.gouv.fr/api/1/datasets/r/350182c9-148a-46e0-8389-76c2ec1374a3)
    - Contenu : SIREN, secteur d'activité (NAF), département, effectifs, date de création
 
 2. **Bilans financiers (INPI)** : comptes annuels des entreprises
-   - URL : [data.gouv.fr - INPI](https://www.data.gouv.fr)
+   - URL : [data.gouv.fr - INPI]([https://www.data.gouv.fr](https://www.data.gouv.fr/api/1/datasets/r/c4ac8f98-2c97-4417-9070-0cbb9de03875)
    - Contenu : résultat net, actif total, dettes, trésorerie, résultats exceptionnels
 
 ### Caractéristiques du Dataset Final
