@@ -17,7 +17,7 @@ FILE_INPI = $(DIR_RAW)/ExportDetailBilan.parquet
 URL_UL = https://www.data.gouv.fr/api/1/datasets/r/350182c9-148a-46e0-8389-76c2ec1374a3
 URL_ETAB = https://www.data.gouv.fr/api/1/datasets/r/a29c1297-1f92-4e2a-8f6b-8c902ce96c5f
 URL_ETAB_HISTO = https://www.data.gouv.fr/api/1/datasets/r/2b3a0c79-f97b-46b8-ac02-8be6c1f01a8c
-URL_INPI = https://static.data.gouv.fr/resources/donnees-financieres-detaillees-des-entreprises-format-parquet/20250916-061220/export-detail-bilan.parquet
+URL_INPI = https://www.data.gouv.fr/api/1/datasets/r/c4ac8f98-2c97-4417-9070-0cbb9de03875
 
 # Scripts (Dépendances)
 SCRIPT_SIRENE = Scripts/01_build_sirene_infos.py
@@ -52,13 +52,13 @@ $(DIR_RAW) $(DIR_PROC):
 
 # --- 5. Recettes de Téléchargement ---
 $(FILE_UL): $(DIR_RAW)
-	@echo "Téléchargement de StockUniteLegale (le bon)..."
+	@echo "Téléchargement de StockUniteLegale"
 	@curl -L "$(URL_UL)" -o "$(FILE_UL)"
 $(FILE_ETAB): $(DIR_RAW)
-	@echo "Téléchargement de StockEtablissement (le bon)..."
+	@echo "Téléchargement de StockEtablissement"
 	@curl -L "$(URL_ETAB)" -o "$(FILE_ETAB)"
 $(FILE_ETAB_HISTO): $(DIR_RAW)
-	@echo "Téléchargement de StockEtablissementHistorique (le bon)..."
+	@echo "Téléchargement de StockEtablissementHistorique"
 	@curl -L "$(URL_ETAB_HISTO)" -o "$(FILE_ETAB_HISTO)"
 $(FILE_INPI): $(DIR_RAW)
 	@echo "Téléchargement de ExportDetailBilan (INPI)..."
@@ -69,14 +69,14 @@ download: $(FILE_UL) $(FILE_ETAB) $(FILE_ETAB_HISTO) $(FILE_INPI)
 
 # --- 6. Data Processing (La Pipeline "Monstrueuse") ---
 $(PROC_SIRENE): $(SCRIPT_SIRENE) $(FILE_UL) $(FILE_ETAB) $(FILE_ETAB_HISTO) .venv/bin/activate
-	@echo "--- [1/2] Lancement Script 01: Création du MASTER FILE SIRENE..."
+	@echo "--- [1/2] Lancement Script 01: Création de sirene_infos...\n"
 	$(PYTHON) $(SCRIPT_SIRENE)
-	@echo "--- [1/2] Master SIRENE créé. ---"
+	@echo "--- [1/2] sirene_infos créé. ---\n"
 
 $(PROC_INPI): $(SCRIPT_INPI) $(FILE_INPI) .venv/bin/activate
-	@echo "--- [2/2] Lancement Script 02: Création du 'DNA Financier'..."
+	@echo "--- [2/2] Lancement Script 02: Création de 'sirene_bilan'...\n"
 	$(PYTHON) $(SCRIPT_INPI)
-	@echo "--- [2/2] 'DNA Financier' créé. ---"
+	@echo "--- [2/2] 'sirene_bilan' créé. ---\n"
 
 # --- 7. Autres Commandes ---
 notebooks: .venv/bin/activate
