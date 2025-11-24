@@ -1,232 +1,269 @@
+"""
+Supervised Learning - Final Project
+Main training pipeline for predicting business outcomes
+"""
+
+import polars as pl
 import numpy as np
-import xgboost as xgb
-from sklearn.model_selection import train_test_split, KFold, RandomizedSearchCV
-from sklearn.metrics import mean_absolute_error, r2_score, make_scorer, roc_auc_score, accuracy_score
-import category_encoders as ce  # Pour le Target Encoding
-import matplotlib.pyplot as plt
-import seaborn as sns
-import pandas as pd 
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    accuracy_score, 
+    precision_score, 
+    recall_score, 
+    f1_score,
+    classification_report,
+    confusion_matrix
+)
 import warnings
-# Supprimer les avertissements pour une sortie plus propre
-warnings.filterwarnings('ignore', category=UserWarning)
-warnings.filterwarnings('ignore', category=FutureWarning)
-
-# ==================================================
-## 0. FONCTIONS UTILITAIRES ET MAPE
-# ==================================================
-
-def mean_absolute_percentage_error(y_true, y_pred):
-    """Calcule la MAPE, gère la division par zéro."""
-    epsilon = 1e-8 
-    return np.mean(np.abs((y_true - y_pred) / np.maximum(np.abs(y_true), epsilon))) * 100
-
-def safe_divide(numerator, denominator):
-    """Calcule le ratio, gère la division par zéro et les valeurs infinies."""
-    denominator_safe = denominator.replace(0, np.nan)
-    ratio = numerator / denominator_safe
-    ratio = ratio.replace([np.inf, -np.inf], np.nan).fillna(0)
-    return ratio
-
-def safe_log1p(series):
-    """Applique log(1 + abs(x)) * sign(x) pour gérer les valeurs positives et négatives."""
-    return np.sign(series) * np.log1p(np.abs(series))
+warnings.filterwarnings('ignore')
 
 
-# ==================================================
-## 1. DATA PREP & FEATURE ENGINEERING
-# ==================================================
-
-
-
-# Assumer que df_bilan_joined est déjà un DataFrame Pandas contenant 'departement'
-df = df_full.to_pandas()
-
-# --- Création des Features ---
-df['ratio_liquidite'] = safe_divide(df['DA_TresorerieActive'], df['DL_DettesCourtTerme'])
-df['ratio_stabilite_inv'] = safe_divide(1, df['anciennete_entreprise']).replace([np.inf, -np.inf], 0).fillna(0)
-df['proxy_actif_taux'] = safe_divide(df['DA_TresorerieActive'] - df['DL_DettesCourtTerme'], df['anciennete_entreprise']).replace([np.inf, -np.inf], 0).fillna(0)
-df['HN_RésultatNet_log'] = safe_log1p(df['HN_RésultatNet'])
-df['FR_ResultatExceptionnel_log'] = safe_log1p(df['FR_ResultatExceptionnel'])
-df['flag_exceptionnel'] = (df['FR_ResultatExceptionnel'] != 0).astype(int)
-
-
-# 2. Nettoyage et définition des Cibles
-df = df.replace([np.inf, -np.inf], np.nan)
-df = df.dropna() 
-
-# --- CRÉATION DES CIBLES ---
-df['target_is_profit'] = (df['cible_ResultatNet_T_plus_1'] > 0).astype(int)
-df['target_magnitude_log'] = np.log1p(np.abs(df['cible_ResultatNet_T_plus_1']))
-
-
-TARGET_COLUMN = 'cible_ResultatNet_T_plus_1'
-COLUMNS_TO_DROP = [
-    TARGET_COLUMN, 'target_is_profit', 'target_magnitude_log', 
-    # Suppression des colonnes non-numériques ou leakées, MAIS ON GARDE 'departement'
-    'siren', 'date_cloture_exercice', 'cible_HN_RésultatNet_T_plus_1', 
-    'ID_entreprise', 'ratio_tresorerie', 'FR_ResultatExceptionnel'
-]
-
-# X = Features (maintenant incluant 'departement')
-X = df.drop(columns=COLUMNS_TO_DROP, errors='ignore')
-Y_reg_log = df['target_magnitude_log']
-Y_cls = df['target_is_profit']
-
-
-# 3. Train / test split (sur l'ensemble complet)
-X_train, X_test, Y_reg_log_train, Y_reg_log_test, Y_cls_train, Y_cls_test = train_test_split(
-    X, Y_reg_log, Y_cls, test_size=0.2, random_state=42
-)
-print(f"Shapes (Train: {X_train.shape}, Test: {X_test.shape})")
-
-# ==================================================
-## 2. ÉTAPE 1 : CLASSIFICATION DU SIGNE (PROFIT ou PERTE)
-# ==================================================
-print("\n[MODELE CLS] Entraînement pour prédire le SIGNE (Profit/Perte)...")
-
-# Target Encoding du département pour la classification (basé sur Y_cls)
-cls_encoder = ce.TargetEncoder(cols=['departement'])
-X_train_cls_encoded = cls_encoder.fit_transform(X_train, Y_cls_train)
-X_test_cls_encoded = cls_encoder.transform(X_test)
-
-
-cls_model = xgb.XGBClassifier(
-    objective='binary:logistic', eval_metric='auc', n_estimators=500,
-    learning_rate=0.05, max_depth=5, random_state=42, n_jobs=-1
-)
-cls_model.fit(X_train_cls_encoded, Y_cls_train)
-cls_pred = cls_model.predict(X_test_cls_encoded)
-cls_accuracy = accuracy_score(Y_cls_test, cls_pred)
-
-print("\n--- PERFORMANCE CLASSIFICATION (Signe) ---")
-print(f"Accuracy : {cls_accuracy:.4f}")
-
-# ==================================================
-## 3. ÉTAPE 2 : RÉGRESSION DE LA MAGNITUDE (CV=5)
-# ==================================================
-print("\n[MODELE REG] Cross-Validation (CV=5) avec TARGET ENCODING sur le Département...")
-
-kf = KFold(n_splits=5, shuffle=True, random_state=42)
-
-mae_scores_cv = []
-r2_scores_cv = []
-mape_scores_cv = []
-
-# Modèle de régression de base (paramètres fixés sans RandomizedSearch)
-base_regressor = xgb.XGBRegressor(
-    objective='reg:squarederror', n_estimators=1000, max_depth=7, 
-    learning_rate=0.05, random_state=42, n_jobs=-1
-)
-
-# Boucle de Cross-Validation (KFold est appliqué sur l'ensemble X et Y complets)
-for fold, (train_index, val_index) in enumerate(kf.split(X)):
+def load_dataset(path: str) -> pl.DataFrame:
+    """
+    Load the dataset from parquet file
     
-    # Séparation des données du fold
-    X_train_fold, X_val_fold = X.iloc[train_index], X.iloc[val_index]
-    Y_reg_log_train_fold = Y_reg_log.iloc[train_index]
+    Args:
+        path: Path to the parquet file
+        
+    Returns:
+        Polars DataFrame with the loaded data
+    """
+    print("Loading dataset...")
+    df = pl.read_parquet(path)
+    print(f"Dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
+    return df
+
+
+def preprocess_data(df: pl.DataFrame):
+    """
+    Preprocess the dataset: handle missing values, encode categorical variables
     
-    # 1. TARGET ENCODING (Calculé uniquement sur le TRAIN du fold)
-    reg_encoder = ce.TargetEncoder(cols=['departement']) 
+    Args:
+        df: Raw dataframe
+        
+    Returns:
+        X: Features (numpy array)
+        y: Target variable (numpy array)
+        feature_names: List of feature names
+    """
+    print("\nPreprocessing data...")
     
-    X_train_encoded = reg_encoder.fit_transform(X_train_fold, Y_reg_log_train_fold)
-    X_val_encoded = reg_encoder.transform(X_val_fold)
+    # Convert to pandas for sklearn compatibility
+    df_pandas = df.to_pandas()
     
-    # 2. Entraînement et Prédiction
-    fold_reg_model = base_regressor
-    fold_reg_model.fit(X_train_encoded, Y_reg_log_train_fold)
+    # Define target variable (assuming Y_RN is the target)
+    target_col = 'Y_RN'
     
-    pred_log_mag = fold_reg_model.predict(X_val_encoded)
-    pred_magnitude = np.expm1(pred_log_mag)
+    # Separate features and target
+    y = df_pandas[target_col].values
     
-    # 3. Évaluation sur le Y original (Magnitude Absolue)
-    y_val_original = df.loc[Y_reg_log.iloc[val_index].index, TARGET_COLUMN]
-
-    mae_scores_cv.append(mean_absolute_error(y_val_original.abs(), pred_magnitude))
-    r2_scores_cv.append(r2_score(y_val_original.abs(), pred_magnitude))
-    mape_scores_cv.append(mean_absolute_percentage_error(y_val_original.abs(), pred_magnitude))
-
-    print(f"Fold {fold+1}: MAE={mae_scores_cv[-1]:,.0f}€, R2={r2_scores_cv[-1]:.4f}")
-
-
-# 4. Entraînement du modèle final sur l'ensemble TRAIN complet (pour le Test Set)
-final_reg_encoder = ce.TargetEncoder(cols=['departement']) 
-X_train_final_encoded = final_reg_encoder.fit_transform(X_train, Y_reg_log_train)
-
-reg_model_final = base_regressor
-reg_model_final.fit(X_train_final_encoded, Y_reg_log_train)
-
-
-print("\n--- PERFORMANCE MOYENNE CROSS-VALIDATION (Magnitude) ---")
-print(f"MAE (CV) : {np.mean(mae_scores_cv):,.2f} €")
-print(f"R² (CV)  : {np.mean(r2_scores_cv):.4f}")
-# print(f"MAPE (CV): {np.mean(mape_scores_cv):.2f} %")
-
-
-# ==================================================
-## 4. PRÉDICTION FINALE & ÉVALUATION GLOBALE (Test Set)
-# ==================================================
-
-# 1. Application de l'encodage final sur le Test Set
-X_test_final_encoded = final_reg_encoder.transform(X_test) 
-
-# 2. Prédiction de la Magnitude (Log-échelle)
-predictions_magnitude_log = reg_model_final.predict(X_test_final_encoded)
-predictions_magnitude = np.expm1(predictions_magnitude_log)
-predictions_magnitude[predictions_magnitude < 0] = 0
-
-# 3. Prédiction du Signe (utilisant le cls_pred calculé sur X_test_cls_encoded)
-predictions_signe = np.where(cls_pred == 1, 1, -1)
-final_predictions = predictions_signe * predictions_magnitude
-
-# 4. Évaluation
-y_test_original = df.loc[Y_cls_test.index, TARGET_COLUMN] 
-
-final_mae = mean_absolute_error(y_test_original, final_predictions)
-final_r2 = r2_score(y_test_original, final_predictions)
-final_mape = mean_absolute_percentage_error(y_test_original, final_predictions)
-
-print("\n--- PERFORMANCE GLOBALE FINALE (Test Set) ---")
-print(f"MAE : {final_mae:,.2f} € ")
-print(f"R²  : {final_r2:.4f} ")
-# print(f"MAPE: {final_mape:.2f} %")
+    # Select features - remove target and identifier columns
+    cols_to_drop = [target_col, 'siren', 'dateCreationUniteLegale']
+    feature_cols = [col for col in df_pandas.columns if col not in cols_to_drop]
+    
+    X = df_pandas[feature_cols].copy()
+    
+    # Handle categorical variables
+    categorical_cols = X.select_dtypes(include=['object', 'category']).columns
+    
+    print(f"Encoding {len(categorical_cols)} categorical variables...")
+    label_encoders = {}
+    for col in categorical_cols:
+        le = LabelEncoder()
+        X[col] = X[col].fillna('missing')
+        X[col] = le.fit_transform(X[col].astype(str))
+        label_encoders[col] = le
+    
+    # Handle missing values in numerical columns
+    numerical_cols = X.select_dtypes(include=[np.number]).columns
+    X[numerical_cols] = X[numerical_cols].fillna(X[numerical_cols].median())
+    
+    print(f"Features shape: {X.shape}")
+    print(f"Target distribution:\n{np.bincount(y)}")
+    
+    return X.values, y, X.columns.tolist()
 
 
-# ==================================================
-## 5. PLOTS ET ANALYSE D'IMPORTANCE
-# ==================================================
+def train_baseline_model(X_train, y_train, X_test, y_test):
+    """
+    Train a simple baseline model (Logistic Regression)
+    
+    Args:
+        X_train, y_train: Training data
+        X_test, y_test: Test data
+        
+    Returns:
+        Trained model and metrics dictionary
+    """
+    print("\n" + "="*60)
+    print("BASELINE MODEL: Logistic Regression")
+    print("="*60)
+    
+    # Standardize features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    
+    # Train model
+    model = LogisticRegression(random_state=42, max_iter=1000)
+    model.fit(X_train_scaled, y_train)
+    
+    # Predictions
+    y_pred = model.predict(X_test_scaled)
+    
+    # Compute metrics
+    metrics = compute_metrics(y_test, y_pred, "Baseline")
+    
+    # Cross-validation
+    cv_scores = cross_val_score(model, X_train_scaled, y_train, cv=5, scoring='f1_macro')
+    print(f"\nCross-validation F1 scores: {cv_scores}")
+    print(f"Mean CV F1 score: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
+    
+    return model, scaler, metrics
 
-# 5.1 FEATURE IMPORTANCE (Modèle de REGRESSION de Magnitude)
-print("\n[PLOTS] Génération de la Feature Importance pour le modèle de Magnitude...")
 
-# La colonne 'departement' sera affichée comme sa valeur encodée
-importance = reg_model_final.get_booster().get_score(importance_type='gain')
-importance_df = pd.DataFrame(list(importance.items()), columns=['Feature', 'Importance'])
-importance_df = importance_df.sort_values(by='Importance', ascending=False)
+def train_improved_model(X_train, y_train, X_test, y_test):
+    """
+    Train an improved model (Random Forest)
+    
+    Args:
+        X_train, y_train: Training data
+        X_test, y_test: Test data
+        
+    Returns:
+        Trained model and metrics dictionary
+    """
+    print("\n" + "="*60)
+    print("IMPROVED MODEL: Random Forest")
+    print("="*60)
+    
+    # Standardize features (optional for RF but good practice)
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    
+    # Train model
+    model = RandomForestClassifier(
+        n_estimators=100,
+        max_depth=10,
+        min_samples_split=5,
+        random_state=42,
+        n_jobs=-1
+    )
+    model.fit(X_train_scaled, y_train)
+    
+    # Predictions
+    y_pred = model.predict(X_test_scaled)
+    
+    # Compute metrics
+    metrics = compute_metrics(y_test, y_pred, "Random Forest")
+    
+    # Cross-validation
+    cv_scores = cross_val_score(model, X_train_scaled, y_train, cv=5, scoring='f1_macro')
+    print(f"\nCross-validation F1 scores: {cv_scores}")
+    print(f"Mean CV F1 score: {cv_scores.mean():.4f} (+/- {cv_scores.std() * 2:.4f})")
+    
+    # Feature importance
+    print("\nTop 10 most important features:")
+    feature_importance = sorted(
+        zip(range(len(model.feature_importances_)), model.feature_importances_),
+        key=lambda x: x[1],
+        reverse=True
+    )[:10]
+    for idx, importance in feature_importance:
+        print(f"  Feature {idx}: {importance:.4f}")
+    
+    return model, scaler, metrics
 
-plt.figure(figsize=(12, 8))
-sns.barplot(
-    x='Importance', 
-    y='Feature', 
-    data=importance_df.head(20), 
-    palette="viridis"
-)
-plt.title("Variables les plus influentes sur la MAGNITUDE (incl. Target Encoding)")
-plt.tight_layout()
-plt.savefig("feature_importance_target_encoded.png")
 
-# 5.2 PLOT PRÉDICTION vs RÉALITÉ
-plt.figure(figsize=(10, 10))
-plt.scatter(y_test_original, final_predictions, alpha=0.4, s=10)
-p1 = max(max(final_predictions), max(y_test_original))
-p0 = min(min(final_predictions), min(y_test_original))
-plt.plot([p0, p1], [p0, p1], 'r--')
-plt.xlabel('Vrai Résultat Net N+1')
-plt.ylabel('Résultat Prédit N+1')
-plt.title('Précision du Modèle Hybride (Target Encoding)')
-plt.xscale('symlog')
-plt.yscale('symlog')
-plt.grid(True, linestyle='--', alpha=0.6)
-plt.tight_layout()
-plt.savefig("prediction_vs_realite_target_encoded.png")
+def compute_metrics(y_true, y_pred, model_name):
+    """
+    Compute and display classification metrics
+    
+    Args:
+        y_true: True labels
+        y_pred: Predicted labels
+        model_name: Name of the model for display
+        
+    Returns:
+        Dictionary with computed metrics
+    """
+    metrics = {
+        'accuracy': accuracy_score(y_true, y_pred),
+        'precision': precision_score(y_true, y_pred, average='macro', zero_division=0),
+        'recall': recall_score(y_true, y_pred, average='macro', zero_division=0),
+        'f1': f1_score(y_true, y_pred, average='macro', zero_division=0)
+    }
+    
+    print(f"\n{model_name} Metrics:")
+    print(f"  Accuracy:  {metrics['accuracy']:.4f}")
+    print(f"  Precision: {metrics['precision']:.4f}")
+    print(f"  Recall:    {metrics['recall']:.4f}")
+    print(f"  F1 Score:  {metrics['f1']:.4f}")
+    
+    print(f"\nConfusion Matrix:")
+    print(confusion_matrix(y_true, y_pred))
+    
+    print(f"\nClassification Report:")
+    print(classification_report(y_true, y_pred, zero_division=0))
+    
+    return metrics
 
-print("\nGraphiques générés : 'feature_importance_target_encoded.png' et 'prediction_vs_realite_target_encoded.png'")
+
+def main():
+    """
+    Main training pipeline
+    """
+    print("="*60)
+    print("SUPERVISED LEARNING - FINAL PROJECT")
+    print("="*60)
+    
+    # 1. Load dataset
+    df = load_dataset('Data/processed/sirene_final2.parquet')
+    
+    # 2. Preprocess data
+    X, y, feature_names = preprocess_data(df)
+    
+    # 3. Train-test split (80-20 split, stratified)
+    print("\nSplitting data into train and test sets...")
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, 
+        test_size=0.2, 
+        random_state=42,
+        stratify=y
+    )
+    print(f"Train set: {X_train.shape[0]} samples")
+    print(f"Test set: {X_test.shape[0]} samples")
+    
+    # 4. Train baseline model
+    baseline_model, baseline_scaler, baseline_metrics = train_baseline_model(
+        X_train, y_train, X_test, y_test
+    )
+    
+    # 5. Train improved model
+    improved_model, improved_scaler, improved_metrics = train_improved_model(
+        X_train, y_train, X_test, y_test
+    )
+    
+    # 6. Compare results
+    print("\n" + "="*60)
+    print("RESULTS COMPARISON")
+    print("="*60)
+    print(f"\n{'Metric':<15} {'Baseline':<15} {'Random Forest':<15} {'Improvement':<15}")
+    print("-"*60)
+    for metric in ['accuracy', 'precision', 'recall', 'f1']:
+        baseline_val = baseline_metrics[metric]
+        improved_val = improved_metrics[metric]
+        improvement = ((improved_val - baseline_val) / baseline_val * 100) if baseline_val > 0 else 0
+        print(f"{metric.capitalize():<15} {baseline_val:<15.4f} {improved_val:<15.4f} {improvement:+.2f}%")
+    
+    print("\n" + "="*60)
+    print("Training completed successfully!")
+    print("="*60)
+
+
+if __name__ == "__main__":
+    main()
