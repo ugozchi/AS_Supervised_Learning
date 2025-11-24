@@ -70,8 +70,8 @@ Scripts de preprocessing :
 
 1. **Cloner le repository**
 ```bash
-git clone [URL_DU_REPO]
-cd [NOM_DU_REPO]
+git clone https://github.com/ugozchi/AS_Supervised_Learning.git
+cd AS_Supervised_Learning
 ```
 
 2. **Créer l'environnement virtuel et installer les dépendances**
@@ -148,25 +148,21 @@ Le script `main.py` :
 ### Experiment Tracking
 
 #### Expérience 1 : Baseline
-- **Commit** : `[hash du commit]`
 - **Changements** : Architecture hybride Classification + Régression
 - **Résultats** : R²=0.5644, MAE=352k€
 - **Observation** : Bonnes performances sur les profits, difficultés sur les pertes
 
 #### Expérience 2 : Nettoyage des ratios aberrants
-- **Commit** : `[hash du commit]`
 - **Changements** : Clipping des ratios entre -10 et +10
 - **Résultats** : R²=0.570 (+0.6%), MAE=348k€ (-1.2%)
 - **Observation** : Légère amélioration de la stabilité
 
 #### Expérience 3 : Ajout feature `flag_dettes_explosives`
-- **Commit** : `[hash du commit]`
 - **Changements** : Flag binaire si ratio_endettement > 2.0
 - **Résultats** : R²=0.572 (+1.3%), MAE=345k€ (-2.0%)
 - **Observation** : Meilleure identification des entreprises en difficulté
 
 #### Expérience 4 : Optimisation hyperparamètres (régularisation)
-- **Commit** : `[hash du commit]`
 - **Changements** : Augmentation reg_alpha/lambda, ajustement subsample
 - **Résultats** : R²=0.568 (-0.7%), MAE=350k€
 - **Observation** : Sur-régularisation, retour à la version précédente
@@ -184,7 +180,9 @@ Le script `main.py` :
 .
 ├── README.md                    # Ce fichier
 ├── main.py                      # Pipeline d'entraînement principal
-├── eda.ipynb                    # Analyse exploratoire des données (01_EDA.ipynb)
+├── Notebooks/
+│   ├── 00_Sandbox.ipynb
+│   └── 01_EDA.ipynb
 ├── requirements.txt             # Dépendances Python
 ├── Makefile                     # Automatisation du pipeline
 ├── Scripts/
@@ -233,11 +231,3 @@ Le script `main.py` :
 3. **Modèles avancés** : LightGBM, CatBoost, ensembles de modèles
 4. **Segmentation** : modèles spécialisés par secteur d'activité
 5. **API de déploiement** : servir le modèle via FastAPI (bonus)
-
----
-
-## 📞 Contact
-
-Pour toute question sur ce projet :
-- Thomas : [email]
-- [Binôme] : [email]
