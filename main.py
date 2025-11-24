@@ -1,7 +1,7 @@
 import numpy as np
-import lightgbm as lgb
+import xgboost as xgb
 from sklearn.model_selection import KFold
-from sklearn.metrics import mean_absolute_error, r2_score, mean_squared_error
+from sklearn.metrics import mean_absolute_error, r2_score, accuracy_score, mean_squared_error
 import category_encoders as ce  
 import pandas as pd  
 import warnings
@@ -15,7 +15,7 @@ from typing import Tuple
 warnings.filterwarnings('ignore')
 
 # ==================================================
-## 0. CONFIGURATION - RÉGRESSION DIRECTE AVEC LIGHTGBM
+## 0. CONFIGURATION
 # ==================================================
 
 DATA_PATH = 'Data/processed/sirene_final2.parquet'
@@ -25,6 +25,7 @@ RANDOM_SEED = 42
 TARGET_ENCODING_COLS = ['departement', 'secteur_NAF_2chiffres']
 
 FINAL_FEATURE_WHITELIST = [
+    # Features baseline
     'ratio_rentabilite_nette', 'ratio_endettement', 'ratio_tresorerie', 
     'ratio_resultat_financier', 'ratio_resultat_exceptionnel', 
     'ratio_liquidite', 'ratio_stabilite_inv', 'proxy_actif_taux',
@@ -34,10 +35,10 @@ FINAL_FEATURE_WHITELIST = [
     'flag_exceptionnel', 
     'taux_croissance_RN_N-1', 'taux_croissance_RN_N-2', 
     'departement', 'secteur_NAF_2chiffres',
-    # Nouvelles features
-    'interaction_liquidite_endettement',
-    'RN_volatility_log',
-    'flag_croissance',
+    # 🆕 Nouvelles features spécifiques pertes
+    'flag_dettes_explosives',
+    'flag_perte_consecutive',
+    'ratio_solvabilite_immediat',
 ]
 
 COLS_TO_WINSORIZE = [
@@ -50,7 +51,7 @@ WINSOR_HIGH = 0.975
 
 def load_data(file_path: str) -> pd.DataFrame:
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"ERREUR: Fichier non trouvé: {file_path}")
+        raise FileNotFoundError(f"ERREUR: {file_path}")
     df_pl = pl.read_parquet(file_path)
     return df_pl.to_pandas()
 
@@ -67,10 +68,12 @@ def safe_log1p(series):
     return np.sign(series) * np.log1p(np.abs(series))
 
 # ==================================================
-## 1. FEATURE ENGINEERING
+## 1. FEATURE ENGINEERING OPTIMISÉ
 # ==================================================
 
 def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
+    """Feature engineering avec nettoyage des ratios aberrants."""
+    
     print("\n🔧 Winsorisation (2.5%-97.5%)...")
     for col in COLS_TO_WINSORIZE:
         if col in df.columns:
@@ -78,6 +81,7 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
             upper_bound = df[col].quantile(WINSOR_HIGH)
             df[col] = np.clip(df[col], lower_bound, upper_bound)
     
+    # --- FEATURES BASELINE ---
     df['taux_croissance_RN_N-1'] = safe_divide(
         df['variation_resultat_net_N-1'], 
         df['HN_RésultatNet'].abs() + 1e-8
@@ -102,34 +106,52 @@ def feature_engineering(df: pd.DataFrame) -> pd.DataFrame:
     df['ratio_dette_ct_vs_actif'] = safe_divide(df['DL_DettesCourtTerme'], df['CJCK_TotalActifBrut'])
     df['ratio_tresorerie_vs_dette_ct'] = safe_divide(df['DA_TresorerieActive'], df['DL_DettesCourtTerme'])
     
-    print("🆕 Ajout de 3 features...")
-    df['interaction_liquidite_endettement'] = df['ratio_liquidite'] * df['ratio_endettement']
-    df['RN_volatility'] = np.abs(
-        df['variation_resultat_net_N-1'] - df['variation_resultat_net_N-2']
-    )
-    df['RN_volatility_log'] = safe_log1p(df['RN_volatility'])
-    df['flag_croissance'] = (
-        (df['taux_croissance_RN_N-1'] > 0) & 
-        (df['taux_croissance_RN_N-2'] > 0)
+    # 🔥 NETTOYAGE DES RATIOS ABERRANTS
+    print("🧹 Nettoyage des ratios aberrants...")
+    ratio_cols = [c for c in df.columns if c.startswith('ratio_')]
+    for col in ratio_cols:
+        if col in df.columns:
+            # Clipper les valeurs extrêmes
+            df[col] = df[col].clip(-10, 10)
+            # Remplacer NaN par 0
+            df[col] = df[col].fillna(0)
+    
+    # 🆕 NOUVELLES FEATURES SPÉCIFIQUES AUX PERTES
+    print("🆕 Ajout de features spécifiques pertes...")
+    
+    # 1. Flag dettes explosives
+    df['flag_dettes_explosives'] = (df['ratio_endettement'] > 2.0).astype(int)
+    
+    # 2. Flag perte consécutive (2 années de suite)
+    df['flag_perte_consecutive'] = (
+        (df['variation_resultat_net_N-1'] < 0) & 
+        (df['variation_resultat_net_N-2'] < 0)
     ).astype(int)
     
-    # 🆕 TARGET : Transformation SYMLOG pour régression directe
-    # Au lieu de séparer signe/magnitude, on prédit directement avec symlog
-    df['target_symlog'] = safe_log1p(df[TARGET_RN_NPLUS1])
+    # 3. Ratio solvabilité immédiat
+    df['ratio_solvabilite_immediat'] = safe_divide(
+        df['DA_TresorerieActive'], 
+        df['DL_DettesCourtTerme'] + 1
+    )
     
+    # --- TARGETS ---
+    df['target_is_profit'] = (df[TARGET_RN_NPLUS1] > 0).astype(int)
+    df['target_magnitude_log'] = np.log1p(np.abs(df[TARGET_RN_NPLUS1]))
+
     cols_to_keep = FINAL_FEATURE_WHITELIST + [
-        TARGET_RN_NPLUS1, 'target_symlog', 'AnneeClotureExercice'
+        TARGET_RN_NPLUS1, 'target_is_profit', 'target_magnitude_log', 'AnneeClotureExercice'
     ]
     df = df[[c for c in cols_to_keep if c in df.columns]]
 
     df = df.replace([np.inf, -np.inf], np.nan)
-    df = df.dropna(subset=[TARGET_RN_NPLUS1, 'target_symlog'])
+    df = df.dropna(subset=[TARGET_RN_NPLUS1, 'target_is_profit', 'target_magnitude_log'])
     
     for col in TARGET_ENCODING_COLS:
         if col in df.columns:
-            df[col] = df[col].astype('category')  # LightGBM gère les catégories nativement
+            df[col] = df[col].astype('object')
     
-    print(f"✅ Features: {len([c for c in df.columns if c in FINAL_FEATURE_WHITELIST])} | Lignes: {len(df):,}")
+    nb_features = len([c for c in df.columns if c in FINAL_FEATURE_WHITELIST])
+    print(f"✅ Features: {nb_features} | Lignes: {len(df):,}")
     return df
 
 # ==================================================
@@ -140,133 +162,168 @@ def split_data(df: pd.DataFrame) -> Tuple:
     df_sorted = df.sort_values(by='AnneeClotureExercice').reset_index(drop=True)
     split_point = int(len(df_sorted) * 0.8)
     
-    cols_to_remove = [TARGET_RN_NPLUS1, 'target_symlog', 'AnneeClotureExercice']
+    cols_to_remove = [TARGET_RN_NPLUS1, 'target_is_profit', 'target_magnitude_log', 'AnneeClotureExercice']
     X = df_sorted.drop(columns=cols_to_remove, errors='ignore')
     
-    Y_symlog = df_sorted['target_symlog']
+    Y_reg_log = df_sorted['target_magnitude_log']
+    Y_cls = df_sorted['target_is_profit']
     Y_raw = df_sorted[TARGET_RN_NPLUS1]
     
     X_train = X.iloc[:split_point].copy()
     X_test = X.iloc[split_point:].copy()
-    Y_symlog_train = Y_symlog.iloc[:split_point].copy()
-    Y_symlog_test = Y_symlog.iloc[split_point:].copy()
+    Y_reg_log_train = Y_reg_log.iloc[:split_point].copy()
+    Y_cls_train = Y_cls.iloc[:split_point].copy()
+    Y_cls_test = Y_cls.iloc[split_point:].copy()
     Y_raw_train = Y_raw.iloc[:split_point].copy()
     Y_raw_test = Y_raw.iloc[split_point:].copy()
 
     print(f"📊 Train: {X_train.shape} | Test: {X_test.shape}")
-    return X_train, X_test, Y_symlog_train, Y_symlog_test, Y_raw_train, Y_raw_test
+    return X_train, X_test, Y_reg_log_train, Y_cls_train, Y_cls_test, Y_raw_train, Y_raw_test
 
 # ==================================================
-## 3. RÉGRESSION DIRECTE AVEC LIGHTGBM + SAMPLE WEIGHTS
+## 3. CLASSIFICATION - BASELINE
 # ==================================================
 
-def calculate_sample_weights(y_true, mode='balanced'):
-    """
-    Calcule les poids pour équilibrer l'importance des petites et grandes valeurs.
-    Mode 'balanced' : poids inversement proportionnel à la magnitude.
-    """
-    if mode == 'balanced':
-        # Plus de poids aux petites valeurs (pour améliorer MAPE)
-        weights = 1.0 / (np.abs(y_true) + 10000)  # +10k€ pour éviter division par 0
-        # Normaliser entre 0.5 et 2.0
-        weights = weights / weights.mean()
-        weights = np.clip(weights, 0.5, 2.0)
-        return weights
-    else:
-        return np.ones(len(y_true))
+def train_and_evaluate_cls(X_train, X_test, Y_train, Y_test):
+    cls_encoder = ce.TargetEncoder(cols=TARGET_ENCODING_COLS, smoothing=10)
+    X_train_encoded = cls_encoder.fit_transform(X_train, Y_train)
+    X_test_encoded = cls_encoder.transform(X_test)
 
-def train_lightgbm_with_cv(X_train, Y_symlog_train, Y_raw_train):
+    print("\n🔵 [CLASSIFICATION] Prédiction du signe...")
+    cls_model = xgb.XGBClassifier(
+        objective='binary:logistic', 
+        eval_metric='auc',
+        n_estimators=700, 
+        learning_rate=0.03,
+        max_depth=7,
+        random_state=RANDOM_SEED, 
+        n_jobs=-1,
+        subsample=0.8,
+        colsample_bytree=0.8,
+    )
+    cls_model.fit(X_train_encoded, Y_train)
+
+    cls_pred = cls_model.predict(X_test_encoded)
+    cls_accuracy = accuracy_score(Y_test, cls_pred)
+    print(f"✅ Accuracy: {cls_accuracy:.4f}")
+    
+    return cls_model, cls_encoder
+
+# ==================================================
+## 4. RÉGRESSION SÉPARÉE PERTES/PROFITS ⭐
+# ==================================================
+
+def train_regression_models_separated(X_train, Y_reg_log_train, Y_raw_train):
     """
-    Entraîne LightGBM avec CV et sample weights optimisés pour MAPE.
+    🔥 INNOVATION MAJEURE : Entraîne 2 modèles séparés.
+    - Modèle A : seulement sur PROFITS
+    - Modèle B : seulement sur PERTES
     """
     
-    print("\n🟢 [LIGHTGBM] Régression directe avec CV (5 folds)...")
-    kf = KFold(n_splits=5, shuffle=True, random_state=RANDOM_SEED)
+    print("\n🟢 [RÉGRESSION SÉPARÉE] Entraînement de 2 modèles distincts...")
     
-    # 🔥 Paramètres LightGBM optimisés
-    params = {
-        'objective': 'regression',
-        'metric': 'mae',  # Optimiser pour MAE (corrélé avec MAPE)
-        'boosting_type': 'gbdt',
-        'num_leaves': 31,  # Complexité modérée
-        'max_depth': 6,
-        'learning_rate': 0.05,
-        'n_estimators': 2000,
-        'subsample': 0.8,
-        'colsample_bytree': 0.8,
-        'reg_alpha': 0.5,
-        'reg_lambda': 0.5,
-        'min_child_samples': 20,
-        'random_state': RANDOM_SEED,
-        'n_jobs': -1,
-        'verbose': -1,
+    # Séparer train en profits/pertes
+    mask_profits = Y_raw_train > 0
+    mask_pertes = Y_raw_train <= 0
+    
+    print(f"  📊 Profits: {mask_profits.sum():,} samples")
+    print(f"  📊 Pertes:  {mask_pertes.sum():,} samples")
+    
+    # --- MODÈLE PROFITS ---
+    print("\n  🟢 Modèle PROFITS (CV=3)...")
+    X_train_profits = X_train[mask_profits].copy()
+    Y_train_profits = Y_reg_log_train[mask_profits].copy()
+    
+    model_profits, encoder_profits = train_single_regression_model(
+        X_train_profits, Y_train_profits, 
+        model_name="Profits", n_folds=3
+    )
+    
+    # --- MODÈLE PERTES ---
+    print("\n  🔴 Modèle PERTES (CV=3)...")
+    X_train_pertes = X_train[mask_pertes].copy()
+    Y_train_pertes = Y_reg_log_train[mask_pertes].copy()
+    
+    model_pertes, encoder_pertes = train_single_regression_model(
+        X_train_pertes, Y_train_pertes,
+        model_name="Pertes", n_folds=3
+    )
+    
+    return {
+        'profits': model_profits,
+        'pertes': model_pertes,
+        'encoder_profits': encoder_profits,
+        'encoder_pertes': encoder_pertes
     }
+
+def train_single_regression_model(X_train, Y_train, model_name="Model", n_folds=3):
+    """Entraîne un seul modèle de régression avec CV."""
     
+    kf = KFold(n_splits=n_folds, shuffle=True, random_state=RANDOM_SEED)
     r2_scores = []
-    mae_scores = []
+    
+    # 🔥 RÉGULARISATION ADAPTÉE selon le nombre de données
+    is_small_dataset = len(X_train) < 50000
+    
+    if is_small_dataset:  # Pour PERTES (peu de données)
+        base_params = {
+            'objective': 'reg:squarederror',
+            'n_estimators': 500,      # 🔥 Réduit de 1500 → 500
+            'max_depth': 3,           # 🔥 Réduit de 6 → 3
+            'learning_rate': 0.05,    # 🔥 Augmenté (moins d'overfitting)
+            'subsample': 0.6,         # 🔥 Réduit
+            'colsample_bytree': 0.6,  # 🔥 Réduit
+            'reg_alpha': 2.0,         # 🔥 x4 régularisation L1
+            'reg_lambda': 2.0,        # 🔥 x4 régularisation L2
+            'min_child_weight': 5,    # 🔥 Nouveau
+            'random_state': RANDOM_SEED,
+            'n_jobs': -1,
+        }
+    else:  # Pour PROFITS (beaucoup de données)
+        base_params = {
+            'objective': 'reg:squarederror',
+            'n_estimators': 1500,
+            'max_depth': 6,
+            'learning_rate': 0.03,
+            'subsample': 0.7,
+            'colsample_bytree': 0.7,
+            'reg_alpha': 0.5,
+            'reg_lambda': 0.5,
+            'random_state': RANDOM_SEED,
+            'n_jobs': -1,
+        }
     
     for fold, (train_idx, val_idx) in enumerate(kf.split(X_train), 1):
         X_tr = X_train.iloc[train_idx]
         X_val = X_train.iloc[val_idx]
-        Y_tr = Y_symlog_train.iloc[train_idx]
-        Y_val = Y_symlog_train.iloc[val_idx]
-        Y_raw_tr = Y_raw_train.iloc[train_idx]
-        Y_raw_val = Y_raw_train.iloc[val_idx]
+        Y_tr = Y_train.iloc[train_idx]
+        Y_val = Y_train.iloc[val_idx]
         
-        # Target encoding
-        fold_encoder = ce.TargetEncoder(cols=TARGET_ENCODING_COLS, smoothing=15)
+        fold_encoder = ce.TargetEncoder(cols=TARGET_ENCODING_COLS, smoothing=10)
         X_tr_enc = fold_encoder.fit_transform(X_tr, Y_tr)
         X_val_enc = fold_encoder.transform(X_val)
         
-        # 🔥 Sample weights pour améliorer MAPE
-        sample_weights = calculate_sample_weights(Y_raw_tr, mode='balanced')
+        fold_model = xgb.XGBRegressor(**base_params)
+        fold_model.fit(X_tr_enc, Y_tr)
         
-        # Entraînement
-        model = lgb.LGBMRegressor(**params)
-        model.fit(
-            X_tr_enc, Y_tr,
-            sample_weight=sample_weights,
-            eval_set=[(X_val_enc, Y_val)],
-            callbacks=[lgb.early_stopping(stopping_rounds=100, verbose=False)]
-        )
-        
-        # Prédictions en symlog
-        pred_symlog = model.predict(X_val_enc)
-        
-        # Conversion en valeurs brutes
-        pred_raw = np.sign(pred_symlog) * (np.expm1(np.abs(pred_symlog)))
-        
-        # Métriques
-        r2 = r2_score(Y_raw_val, pred_raw)
-        mae = mean_absolute_error(Y_raw_val, pred_raw)
-        
+        pred = fold_model.predict(X_val_enc)
+        r2 = r2_score(Y_val, pred)
         r2_scores.append(r2)
-        mae_scores.append(mae)
-        
-        print(f"  Fold {fold}: R²={r2:.4f} | MAE={mae:,.0f}€ | best_iter={model.best_iteration_}")
+        print(f"    Fold {fold}: R² = {r2:.4f}")
     
-    print(f"\n📈 Moyennes CV:")
-    print(f"  R²  : {np.mean(r2_scores):.4f} ± {np.std(r2_scores):.4f}")
-    print(f"  MAE : {np.mean(mae_scores):,.0f}€ ± {np.std(mae_scores):,.0f}€")
+    print(f"    → R² moyen: {np.mean(r2_scores):.4f} ± {np.std(r2_scores):.4f}")
     
-    # 🔨 Entraînement final sur tout le train
-    print("\n🔨 Entraînement du modèle final...")
-    final_encoder = ce.TargetEncoder(cols=TARGET_ENCODING_COLS, smoothing=15)
-    X_train_enc = final_encoder.fit_transform(X_train, Y_symlog_train)
+    # Entraînement final
+    final_encoder = ce.TargetEncoder(cols=TARGET_ENCODING_COLS, smoothing=10)
+    X_train_enc = final_encoder.fit_transform(X_train, Y_train)
     
-    sample_weights_final = calculate_sample_weights(Y_raw_train, mode='balanced')
-    
-    final_model = lgb.LGBMRegressor(**params)
-    final_model.set_params(n_estimators=int(np.mean([model.best_iteration_ for model in [final_model]])) if hasattr(final_model, 'best_iteration_') else 1000)
-    final_model.fit(
-        X_train_enc, Y_symlog_train,
-        sample_weight=sample_weights_final
-    )
+    final_model = xgb.XGBRegressor(**base_params)
+    final_model.fit(X_train_enc, Y_train)
     
     return final_model, final_encoder
 
 # ==================================================
-## 4. ÉVALUATION
+## 5. MÉTRIQUES
 # ==================================================
 
 def calculate_mape(y_true, y_pred, epsilon=1e-8):
@@ -290,23 +347,56 @@ def calculate_metrics(y_true, y_pred):
         'MedAE': medae
     }
 
-def evaluate_model(model, encoder, X_test, Y_raw_test):
-    print("\n🎯 [ÉVALUATION] Test set...")
+# ==================================================
+## 6. ÉVALUATION AVEC MODÈLES SÉPARÉS
+# ==================================================
+
+def evaluate_separated_models(cls_model, cls_encoder, reg_models, 
+                               X_test, Y_cls_test, Y_raw_test):
+    """Évaluation en utilisant le bon modèle selon le signe prédit."""
     
-    # Encodage
-    X_test_enc = encoder.transform(X_test)
+    print("\n🎯 [ÉVALUATION] Prédictions avec modèles séparés...")
     
-    # Prédiction en symlog
-    pred_symlog = model.predict(X_test_enc)
+    # Encodage pour classification
+    X_test_cls_enc = cls_encoder.transform(X_test)
     
-    # Conversion en valeurs brutes
-    final_pred = np.sign(pred_symlog) * (np.expm1(np.abs(pred_symlog)))
+    # Prédiction du signe
+    pred_sign = cls_model.predict(X_test_cls_enc)
+    pred_sign_binary = np.where(pred_sign == 1, 1, -1)
     
-    # Métriques
+    mask_pred_profits = (pred_sign == 1)
+    mask_pred_pertes = (pred_sign == 0)
+    
+    print(f"  📊 Prédictions profits: {mask_pred_profits.sum():,}")
+    print(f"  📊 Prédictions pertes:  {mask_pred_pertes.sum():,}")
+    
+    # Prédire avec le bon modèle
+    pred_magnitude_log = np.zeros(len(X_test))
+    
+    # Modèle PROFITS
+    if mask_pred_profits.sum() > 0:
+        X_test_profits = X_test[mask_pred_profits].copy()
+        X_test_profits_enc = reg_models['encoder_profits'].transform(X_test_profits)
+        pred_magnitude_log[mask_pred_profits] = reg_models['profits'].predict(X_test_profits_enc)
+    
+    # Modèle PERTES
+    if mask_pred_pertes.sum() > 0:
+        X_test_pertes = X_test[mask_pred_pertes].copy()
+        X_test_pertes_enc = reg_models['encoder_pertes'].transform(X_test_pertes)
+        pred_magnitude_log[mask_pred_pertes] = reg_models['pertes'].predict(X_test_pertes_enc)
+    
+    # Conversion magnitude
+    pred_magnitude = np.expm1(pred_magnitude_log)
+    pred_magnitude = np.maximum(pred_magnitude, 0)
+    
+    # Combinaison finale
+    final_pred = pred_sign_binary * pred_magnitude
+    
+    # Métriques globales
     metrics = calculate_metrics(Y_raw_test, final_pred)
     
     print("\n" + "="*60)
-    print("📊 PERFORMANCE FINALE (Test Set - LightGBM Direct)")
+    print("📊 PERFORMANCE FINALE - MODÈLES SÉPARÉS")
     print("="*60)
     print(f"MAE       : {metrics['MAE']:>15,.2f} €")
     print(f"MedAE     : {metrics['MedAE']:>15,.2f} € (médiane)")
@@ -315,45 +405,31 @@ def evaluate_model(model, encoder, X_test, Y_raw_test):
     print(f"R²        : {metrics['R²']:>15.4f}")
     print("="*60)
     
-    # Analyse détaillée
+    # Analyse par signe
     errors = Y_raw_test - final_pred
-    analyze_errors(Y_raw_test, final_pred, errors)
+    analyze_errors_separated(Y_raw_test, final_pred, errors)
     
     # Visualisations
-    create_comprehensive_plots(Y_raw_test, final_pred, errors, model)
+    create_plots(Y_raw_test, final_pred, errors)
     
     return final_pred, metrics
 
 # ==================================================
-## 5. ANALYSE DES ERREURS
+## 7. ANALYSE DES ERREURS
 # ==================================================
 
-def analyze_errors(y_true, y_pred, errors):
+def analyze_errors_separated(y_true, y_pred, errors):
     print("\n" + "="*60)
-    print("🔍 ANALYSE DÉTAILLÉE DES ERREURS")
+    print("🔍 ANALYSE DÉTAILLÉE")
     print("="*60)
     
-    print("\n📊 Distribution des erreurs (€):")
-    print(f"  Min      : {errors.min():>15,.0f}")
-    print(f"  Q25      : {np.percentile(errors, 25):>15,.0f}")
-    print(f"  Médiane  : {np.median(errors):>15,.0f}")
-    print(f"  Q75      : {np.percentile(errors, 75):>15,.0f}")
-    print(f"  Max      : {errors.max():>15,.0f}")
-    print(f"  Std      : {errors.std():>15,.0f}")
-    
     abs_errors = np.abs(errors)
-    print("\n📊 Erreurs absolues:")
-    print(f"  Médiane  : {np.median(abs_errors):>15,.0f} €")
-    print(f"  Moyenne  : {abs_errors.mean():>15,.0f} €")
-    print(f"  Q90      : {np.percentile(abs_errors, 90):>15,.0f} €")
-    print(f"  Q95      : {np.percentile(abs_errors, 95):>15,.0f} €")
+    print(f"\n📊 Erreurs globales:")
+    print(f"  Médiane : {np.median(abs_errors):>12,.0f} €")
+    print(f"  Moyenne : {abs_errors.mean():>12,.0f} €")
+    print(f"  Q95     : {np.percentile(abs_errors, 95):>12,.0f} €")
     
-    print("\n📊 Par seuils:")
-    for t in [100_000, 500_000, 1_000_000, 5_000_000]:
-        pct = (abs_errors > t).mean() * 100
-        print(f"  > {t/1e6:.1f}M€ : {pct:>5.2f}%")
-    
-    print("\n📊 Par signe:")
+    print("\n📊 Performance par signe:")
     for label, mask in [('Profits', y_true > 0), ('Pertes', y_true <= 0)]:
         if mask.sum() > 0:
             mae = mean_absolute_error(y_true[mask], y_pred[mask])
@@ -363,36 +439,29 @@ def analyze_errors(y_true, y_pred, errors):
     
     print("="*60)
 
-# ==================================================
-## 6. VISUALISATIONS
-# ==================================================
-
-def create_comprehensive_plots(y_true, y_pred, errors, model):
+def create_plots(y_true, y_pred, errors):
     print("\n📈 Génération des visualisations...")
     sns.set_style("whitegrid")
-    plt.rcParams['figure.dpi'] = 150
     
-    create_dashboard(y_true, y_pred, errors)
-    plot_feature_importance_lgb(model)
-    plot_residuals(y_true, y_pred, errors)
-    
-    print("✅ Visualisations générées!")
-
-def create_dashboard(y_true, y_pred, errors):
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
-    fig.suptitle('LightGBM - Régression Directe', fontsize=16, fontweight='bold')
+    fig.suptitle('Modèle Optimisé - Régression Séparée Pertes/Profits', fontsize=16, fontweight='bold')
     
+    # Scatter
     ax1 = axes[0, 0]
-    ax1.scatter(y_true, y_pred, alpha=0.3, s=15, c='steelblue')
+    mask_profit = y_true > 0
+    ax1.scatter(y_true[mask_profit], y_pred[mask_profit], alpha=0.3, s=15, c='green', label='Profits')
+    ax1.scatter(y_true[~mask_profit], y_pred[~mask_profit], alpha=0.3, s=15, c='red', label='Pertes')
     lim = [min(y_true.min(), y_pred.min()), max(y_true.max(), y_pred.max())]
-    ax1.plot(lim, lim, 'r--', lw=2)
+    ax1.plot(lim, lim, 'k--', lw=2)
     ax1.set_xlabel('Réel (€)')
     ax1.set_ylabel('Prédit (€)')
     ax1.set_title('Prédictions vs Réalité')
     ax1.set_xscale('symlog')
     ax1.set_yscale('symlog')
+    ax1.legend()
     ax1.grid(True, alpha=0.3)
     
+    # Distribution erreurs
     ax2 = axes[0, 1]
     ax2.hist(errors / 1e6, bins=100, alpha=0.7, color='coral', edgecolor='black')
     ax2.axvline(0, color='red', linestyle='--', lw=2)
@@ -401,9 +470,10 @@ def create_dashboard(y_true, y_pred, errors):
     ax2.set_title('Distribution des Erreurs')
     ax2.grid(True, alpha=0.3)
     
+    # Erreur absolue
     ax3 = axes[1, 0]
     abs_errors = np.abs(errors)
-    ax3.scatter(np.abs(y_true), abs_errors, alpha=0.3, s=15, c='green')
+    ax3.scatter(np.abs(y_true), abs_errors, alpha=0.3, s=15, c='steelblue')
     ax3.set_xlabel('|Réel| (€)')
     ax3.set_ylabel('Erreur Absolue (€)')
     ax3.set_title('Erreur vs Magnitude')
@@ -411,127 +481,102 @@ def create_dashboard(y_true, y_pred, errors):
     ax3.set_yscale('log')
     ax3.grid(True, alpha=0.3)
     
+    # Box plot par signe
     ax4 = axes[1, 1]
-    mask = np.abs(y_true) > 1000
-    rel_errors = np.clip(np.abs(errors[mask] / y_true[mask]) * 100, 0, 200)
-    ax4.hist(rel_errors, bins=50, alpha=0.7, color='purple', edgecolor='black')
-    ax4.axvline(np.median(rel_errors), color='red', linestyle='--', lw=2,
-                label=f'Médiane: {np.median(rel_errors):.1f}%')
-    ax4.set_xlabel('Erreur Relative (%)')
-    ax4.set_ylabel('Fréquence')
-    ax4.set_title('Erreurs Relatives')
-    ax4.legend()
-    ax4.grid(True, alpha=0.3)
+    data_box = [
+        errors[y_true > 0] / 1e6,
+        errors[y_true <= 0] / 1e6
+    ]
+    bp = ax4.boxplot(data_box, tick_labels=['Profits', 'Pertes'], patch_artist=True)
+    bp['boxes'][0].set_facecolor('lightgreen')
+    bp['boxes'][1].set_facecolor('lightcoral')
+    ax4.axhline(0, color='red', linestyle='--', lw=1)
+    ax4.set_ylabel('Erreur (M€)')
+    ax4.set_title('Distribution Erreurs par Signe')
+    ax4.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
-    plt.savefig('01_dashboard_lightgbm.png', bbox_inches='tight')
+    plt.savefig('dashboard_optimized.png', bbox_inches='tight', dpi=150)
     plt.close()
-    print("  ✓ Dashboard")
-
-def plot_feature_importance_lgb(model):
-    try:
-        importance = model.feature_importances_
-        feature_names = model.feature_name_
-        
-        df_imp = pd.DataFrame({
-            'Feature': feature_names,
-            'Importance': importance
-        }).sort_values('Importance', ascending=False).head(20)
-        
-        plt.figure(figsize=(12, 8))
-        colors = sns.color_palette("viridis", len(df_imp))
-        plt.barh(range(len(df_imp)), df_imp['Importance'], color=colors)
-        plt.yticks(range(len(df_imp)), df_imp['Feature'])
-        plt.xlabel('Importance')
-        plt.title('Top 20 Features - LightGBM', fontsize=14, fontweight='bold')
-        plt.gca().invert_yaxis()
-        plt.grid(axis='x', alpha=0.3)
-        plt.tight_layout()
-        plt.savefig('02_feature_importance_lgb.png', bbox_inches='tight')
-        plt.close()
-        print("  ✓ Feature importance")
-    except:
-        print("  ⚠️ Skip feature importance")
-
-def plot_residuals(y_true, y_pred, errors):
-    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
-    ax.scatter(y_pred, errors, alpha=0.3, s=15, c='steelblue')
-    ax.axhline(0, color='red', linestyle='--', lw=2)
-    ax.set_xlabel('Prédiction (€)')
-    ax.set_ylabel('Résidu (€)')
-    ax.set_title('Analyse des Résidus', fontsize=14, fontweight='bold')
-    ax.set_xscale('symlog')
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig('03_residuals_lgb.png', bbox_inches='tight')
-    plt.close()
-    print("  ✓ Résidus")
+    print("  ✓ dashboard_optimized.png")
 
 # ==================================================
-## 7. RÉSUMÉ
+## 8. COMPARAISON BASELINE
 # ==================================================
 
-def print_summary(metrics, baseline):
+def print_comparison(metrics, baseline):
     print("\n" + "="*60)
-    print("📊 RÉSUMÉ - LIGHTGBM RÉGRESSION DIRECTE")
+    print("📊 COMPARAISON BASELINE → OPTIMISÉ")
     print("="*60)
     
-    print("\n🆕 Changements majeurs:")
-    print("  • Abandon du modèle hybride Classification/Régression")
-    print("  • Régression DIRECTE avec transformation symlog")
-    print("  • LightGBM au lieu de XGBoost")
-    print("  • Sample weights pour améliorer MAPE")
-    print("  • Optimisation objective='mae' au lieu de 'mse'")
+    improvements = []
     
-    print("\n📊 Baseline (Hybride XGB) → LightGBM Direct:")
     for metric in ['MAE', 'R²', 'MAPE']:
         old = baseline.get(metric, 0)
         new = metrics.get(metric, 0)
+        
         if metric == 'MAE':
             delta = ((new - old) / old * 100) if old != 0 else 0
-            symbol = "✅" if delta < -5 else "⚠️" if delta < 0 else "❌"
+            symbol = "✅" if delta < -2 else "⚠️" if delta < 0 else "❌"
+            improvements.append(delta < 0)
             print(f"  {symbol} {metric:>6}: {old:>10,.0f}€ → {new:>10,.0f}€  ({delta:+.1f}%)")
         elif metric == 'MAPE':
             delta = new - old
-            symbol = "✅" if delta < -10 else "⚠️" if delta < 0 else "❌"
+            symbol = "✅" if delta < -5 else "⚠️" if delta < 0 else "❌"
+            improvements.append(delta < 0)
             print(f"  {symbol} {metric:>6}: {old:>10.1f}% → {new:>10.1f}%  ({delta:+.1f} pts)")
-        else:
+        else:  # R²
             delta = new - old
             symbol = "✅" if delta > 0.02 else "⚠️" if delta > 0 else "❌"
+            improvements.append(delta > 0)
             print(f"  {symbol} {metric:>6}: {old:>10.4f} → {new:>10.4f}  ({delta:+.4f})")
     
-    print("\n🎯 Avantages de cette approche:")
-    print("  • Meilleure gestion des PERTES (pas de séparation artificielle)")
-    print("  • LightGBM plus rapide et souvent plus précis")
-    print("  • Sample weights améliore MAPE sur petites valeurs")
-    print("  • Pas de propagation d'erreur (classification → régression)")
+    print("\n🎯 Améliorations:")
+    print(f"  • Ratios aberrants nettoyés")
+    print(f"  • 3 nouvelles features spécifiques pertes")
+    print(f"  • 2 modèles séparés (profits/pertes)")
+    print(f"  • {sum(improvements)}/3 métriques améliorées")
     
     print("="*60)
 
 # ==================================================
-## 8. PIPELINE PRINCIPAL
+## 9. PIPELINE PRINCIPAL
 # ==================================================
 
 def main():
     print("="*60)
-    print("🚀 LIGHTGBM - RÉGRESSION DIRECTE")
+    print("🚀 PIPELINE OPTIMISÉ - MODÈLES SÉPARÉS")
     print("="*60)
     
     try:
         df_raw = load_data(DATA_PATH)
         df_processed = feature_engineering(df_raw)
         
-        X_train, X_test, Y_symlog_train, Y_symlog_test, Y_raw_train, Y_raw_test = split_data(df_processed)
+        (X_train, X_test, Y_reg_log_train, Y_cls_train, 
+         Y_cls_test, Y_raw_train, Y_raw_test) = split_data(df_processed)
         
-        model, encoder = train_lightgbm_with_cv(X_train, Y_symlog_train, Y_raw_train)
+        # Classification
+        cls_model, cls_encoder = train_and_evaluate_cls(
+            X_train, X_test, Y_cls_train, Y_cls_test
+        )
         
-        final_pred, metrics = evaluate_model(model, encoder, X_test, Y_raw_test)
+        # Régression SÉPARÉE
+        reg_models = train_regression_models_separated(
+            X_train, Y_reg_log_train, Y_raw_train
+        )
         
+        # Évaluation
+        final_pred, metrics = evaluate_separated_models(
+            cls_model, cls_encoder, reg_models,
+            X_test, Y_cls_test, Y_raw_test
+        )
+        
+        # Comparaison
         baseline = {'MAE': 352099, 'R²': 0.5644, 'MAPE': 181.58}
-        print_summary(metrics, baseline)
+        print_comparison(metrics, baseline)
         
-        print("\n✅ Pipeline LightGBM terminé!")
-        print("📁 3 visualisations: 01-03_*.png")
+        print("\n✅ Pipeline optimisé terminé!")
+        print("📁 Visualisation: dashboard_optimized.png")
 
     except Exception as e:
         print(f"\n❌ ERREUR: {e}")
