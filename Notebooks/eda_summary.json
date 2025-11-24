@@ -1,0 +1,27 @@
+{
+  "dataset_info": {
+    "n_rows": 207320,
+    "n_columns": 26,
+    "period": "2014-2022"
+  },
+  "target_stats": {
+    "n_profits": 167171,
+    "n_pertes": 40149,
+    "pct_profits": 80.63,
+    "pct_pertes": 19.37,
+    "y_rn_mean": 841406.4763216284,
+    "y_rn_median": 84989.0,
+    "y_rn_std": 23196337.52392247
+  },
+  "outliers": {
+    "n_outliers_iqr": 35605,
+    "pct_outliers": 17.17
+  },
+  "top_correlations": {
+    "HN_R\u00e9sultatNet": 0.36414403020539077,
+    "ratio_rentabilite_nette": 0.31137511733137707,
+    "DL_DettesCourtTerme": 0.2451060684994441,
+    "CJCK_TotalActifBrut": 0.20777173030803314,
+    "DA_TresorerieActive": 0.16014854018031088
+  }
+}
