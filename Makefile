@@ -22,16 +22,18 @@ URL_INPI = https://www.data.gouv.fr/api/1/datasets/r/c4ac8f98-2c97-4417-9070-0cb
 # Scripts (Dépendances)
 SCRIPT_SIRENE = Scripts/01_build_sirene_infos.py
 SCRIPT_INPI = Scripts/02_build_sirene_bilan.py
+SCRIPT_FINAL = Scripts/03_build_sirene_final.py
 
 # Fichiers propres (Cibles de Process)
 PROC_SIRENE = $(DIR_PROC)/sirene_infos.parquet
 PROC_INPI = $(DIR_PROC)/sirene_bilan.parquet
+PROC_FINAL = $(DIR_PROC)/sirene_final.parquet
 
 # --- 2. Commandes Principales (Mises au début) ---
 all: setup process
 	@echo "--- TOUT EST PRÊT. Lancez 'make notebooks' pour l'analyse. ---"
 
-process: $(PROC_SIRENE) $(PROC_INPI)
+process: $(PROC_SIRENE) $(PROC_INPI) $(PROC_FINAL)
 	@echo "--- Pipeline de données terminée. Fichiers 'processed' prêts. ---"
 
 # --- 3. Setup de l'Environnement ---
@@ -77,6 +79,11 @@ $(PROC_INPI): $(SCRIPT_INPI) $(FILE_INPI) .venv/bin/activate
 	@echo "--- [2/2] Lancement Script 02: Création de 'sirene_bilan'...\n"
 	$(PYTHON) $(SCRIPT_INPI)
 	@echo "--- [2/2] 'sirene_bilan' créé. ---\n"
+
+$(PROC_FINAL): $(SCRIPT_FINAL) $(PROC_SIRENE) $(PROC_INPI) .venv/bin/activate
+	@echo "--- [3/3] Lancement Script 03: Création de 'sirene_final'...\n"
+	$(PYTHON) $(SCRIPT_FINAL)
+	@echo "--- [3/3] 'sirene_final' créé. ---\n"
 
 # --- 7. Autres Commandes ---
 notebooks: .venv/bin/activate

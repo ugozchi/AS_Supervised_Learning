@@ -31,7 +31,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(BASE_DIR, os.pardir))
 
 SIRENE_INFOS_PATH = os.path.join(PROJECT_ROOT, "Data/processed/sirene_infos.parquet")
 SIRENE_BILAN_PATH = os.path.join(PROJECT_ROOT, "Data/processed/sirene_bilan.parquet")
-SIRENE_FINAL_PATH = os.path.join(PROJECT_ROOT, "Data/processed/sirene_final2.parquet")
+SIRENE_FINAL_PATH = os.path.join(PROJECT_ROOT, "Data/processed/sirene_final.parquet")
 
 
 # =========================================================================

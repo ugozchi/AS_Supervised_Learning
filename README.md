@@ -194,7 +194,7 @@ Le script `main.py` :
 │   └── processed/               # Données preprocessées
 │       ├── sirene_infos.parquet
 │       ├── sirene_bilan.parquet
-│       └── sirene_final2.parquet
+│       └── sirene_final.parquet
 └── dashboard_final.png          # Visualisations (généré par main.py)
 ```
 
