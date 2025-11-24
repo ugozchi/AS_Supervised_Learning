@@ -10,6 +10,7 @@ import polars as pl
 import sys
 import matplotlib.pyplot as plt
 import seaborn as sns
+import category_encoders as ce
 from typing import Tuple
 
 warnings.filterwarnings('ignore')
@@ -18,7 +19,7 @@ warnings.filterwarnings('ignore')
 ## 0. CONFIGURATION - MEILLEUR COMPROMIS
 # ==================================================
 
-DATA_PATH = 'Data/processed/sirene_final2.parquet'
+DATA_PATH = 'Data/processed/sirene_final.parquet'
 TARGET_RN_NPLUS1 = 'Y_RN' 
 RANDOM_SEED = 42
 
